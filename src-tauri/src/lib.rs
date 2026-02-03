@@ -745,7 +745,7 @@ async fn format_with_gpt(
     let full_prompt = format!("{}{}", custom_prompt, keyword_instruction);
 
     let request = ChatRequest {
-        model: "gpt-4o-mini".to_string(),
+        model: "gpt-4o".to_string(),
         messages: vec![
             ChatMessage {
                 role: "system".to_string(),
