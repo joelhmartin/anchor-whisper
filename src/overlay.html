@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Recording</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      background: transparent;
+      overflow: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    .container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      padding: 4px;
+      background: transparent;
+    }
+
+    .robot {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      transform: scale(0.55);
+      transform-origin: center center;
+    }
+
+    /* Antenna */
+    .antenna {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .antenna-ball {
+      width: 14px;
+      height: 14px;
+      background: #ff3b30;
+      border-radius: 50%;
+      animation: pulse-glow 0.8s ease-in-out infinite;
+      box-shadow: 0 0 10px #ff3b30, 0 0 20px #ff3b30, 0 0 30px #ff3b30;
+    }
+
+    .antenna-stick {
+      width: 4px;
+      height: 14px;
+      background: #888;
+      border-radius: 2px;
+    }
+
+    @keyframes pulse-glow {
+      0%, 100% {
+        transform: scale(1);
+        box-shadow: 0 0 10px #ff3b30, 0 0 20px #ff3b30, 0 0 30px #ff3b30;
+      }
+      50% {
+        transform: scale(1.4);
+        box-shadow: 0 0 15px #ff6b6b, 0 0 30px #ff3b30, 0 0 50px #ff3b30;
+      }
+    }
+
+    /* Robot Head */
+    .head {
+      width: 72px;
+      height: 52px;
+      background: linear-gradient(180deg, #5a9fd4 0%, #4a8bc4 100%);
+      border-radius: 10px 10px 6px 6px;
+      position: relative;
+      border: 3px solid #3a7bb4;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 14px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+
+    /* Eyes */
+    .eye {
+      width: 16px;
+      height: 16px;
+      background: #1a1a1a;
+      border-radius: 4px;
+      position: relative;
+      animation: blink 3s ease-in-out infinite;
+    }
+
+    .eye::after {
+      content: '';
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 7px;
+      height: 7px;
+      background: #fff;
+      border-radius: 2px;
+    }
+
+    @keyframes blink {
+      0%, 90%, 100% { transform: scaleY(1); }
+      95% { transform: scaleY(0.1); }
+    }
+
+    /* Mouth - sound wave animation */
+    .mouth {
+      position: absolute;
+      bottom: 7px;
+      display: flex;
+      gap: 3px;
+      align-items: flex-end;
+    }
+
+    .mouth-bar {
+      width: 4px;
+      background: #1a1a1a;
+      border-radius: 2px;
+      animation: sound-wave 0.4s ease-in-out infinite;
+    }
+
+    .mouth-bar:nth-child(1) { height: 6px; animation-delay: 0s; }
+    .mouth-bar:nth-child(2) { height: 12px; animation-delay: 0.1s; }
+    .mouth-bar:nth-child(3) { height: 8px; animation-delay: 0.2s; }
+    .mouth-bar:nth-child(4) { height: 14px; animation-delay: 0.15s; }
+    .mouth-bar:nth-child(5) { height: 6px; animation-delay: 0.05s; }
+
+    @keyframes sound-wave {
+      0%, 100% { transform: scaleY(1); }
+      50% { transform: scaleY(0.3); }
+    }
+
+    /* Body */
+    .body {
+      width: 60px;
+      height: 44px;
+      background: linear-gradient(180deg, #5a9fd4 0%, #4a8bc4 100%);
+      border-radius: 4px 4px 10px 10px;
+      border: 3px solid #3a7bb4;
+      margin-top: -2px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+
+    .chest-anchor {
+      font-size: 20px;
+      color: #fff;
+      text-shadow: 0 0 8px rgba(255,255,255,0.5);
+      line-height: 1;
+    }
+
+    /* Label */
+    .label {
+      margin-top: -20px;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro', sans-serif;
+      font-size: 8px;
+      font-weight: 600;
+      color: #fff;
+      background: rgba(255, 59, 48, 0.9);
+      padding: 3px 8px;
+      border-radius: 8px;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .label-dot {
+      width: 4px;
+      height: 4px;
+      background: #fff;
+      border-radius: 50%;
+      animation: pulse-dot 1s ease-in-out infinite;
+    }
+
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="robot">
+      <div class="antenna">
+        <div class="antenna-ball"></div>
+        <div class="antenna-stick"></div>
+      </div>
+      <div class="head">
+        <div class="eye"></div>
+        <div class="eye"></div>
+        <div class="mouth">
+          <div class="mouth-bar"></div>
+          <div class="mouth-bar"></div>
+          <div class="mouth-bar"></div>
+          <div class="mouth-bar"></div>
+          <div class="mouth-bar"></div>
+        </div>
+      </div>
+      <div class="body">
+        <div class="chest-anchor">⚓</div>
+      </div>
+    </div>
+    <div class="label">
+      <span class="label-dot"></span>
+      Listening
+    </div>
+  </div>
+</body>
+</html>

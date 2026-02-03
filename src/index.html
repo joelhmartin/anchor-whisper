@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Anchor Whisper</title>
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="/main.js" defer></script>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Anchor Whisper</h1>
+      <nav>
+        <button id="nav-record" class="nav-btn active">Record</button>
+        <button id="nav-settings" class="nav-btn">Settings</button>
+      </nav>
+    </header>
+
+    <!-- Record Page -->
+    <div id="page-record" class="page">
+      <div class="section">
+        <div class="api-key-row" id="api-key-section">
+          <input type="password" id="api-key" placeholder="OpenAI API Key (sk-...)" />
+          <button id="save-key-btn">Save</button>
+        </div>
+        <p id="key-status" class="status"></p>
+      </div>
+
+      <div class="section">
+        <p class="hint">Hold button or use <kbd id="hotkey-display">Ctrl+Space</kbd> to record</p>
+
+        <button id="record-btn" class="record-btn">
+          <span class="record-icon"></span>
+          <span id="record-text">Hold to Record</span>
+        </button>
+
+        <div id="recording-indicator" class="recording-indicator hidden">
+          <span class="pulse"></span> Recording...
+        </div>
+      </div>
+
+      <div class="section results">
+        <h2>Results</h2>
+
+        <div class="result-box">
+          <label>Raw Transcription</label>
+          <div id="raw-text" class="output-box">
+            <p class="placeholder">Raw speech-to-text will appear here...</p>
+          </div>
+        </div>
+
+        <div class="result-box">
+          <label>Formatted Text</label>
+          <div id="formatted-text" class="output-box formatted">
+            <p class="placeholder">AI-formatted text will appear here...</p>
+          </div>
+          <div class="button-row">
+            <button id="copy-btn" class="copy-btn" disabled>Copy</button>
+            <button id="paste-btn" class="paste-btn" disabled>Paste at Cursor</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <label class="checkbox-label">
+          <input type="checkbox" id="auto-paste" checked />
+          Auto-paste at cursor after transcription
+        </label>
+      </div>
+    </div>
+
+    <!-- Settings Page -->
+    <div id="page-settings" class="page hidden">
+      <div class="section">
+        <h2>Hotkey</h2>
+        <p class="hint">Click the field and press your desired key combination</p>
+        <div class="hotkey-input-row">
+          <input type="text" id="hotkey-input" readonly placeholder="Press keys..." />
+          <button id="save-hotkey-btn">Save</button>
+        </div>
+        <p id="hotkey-status" class="status"></p>
+      </div>
+
+      <div class="section">
+        <h2>Custom Keywords</h2>
+        <p class="hint">Add words/acronyms that should be spelled exactly as you want</p>
+
+        <div class="keyword-input-row">
+          <input type="text" id="keyword-spoken" placeholder="Spoken word (e.g., adc)" />
+          <span class="arrow">→</span>
+          <input type="text" id="keyword-replacement" placeholder="Replacement (e.g., ADC)" />
+          <button id="add-keyword-btn">Add</button>
+        </div>
+
+        <div id="keywords-list" class="keywords-list">
+          <p class="placeholder">No keywords added yet</p>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>Formatting Prompt</h2>
+        <p class="hint">Customize how the AI formats your transcriptions</p>
+
+        <textarea id="custom-prompt" rows="12" placeholder="Enter custom prompt..."></textarea>
+
+        <div class="button-row">
+          <button id="save-prompt-btn">Save Prompt</button>
+          <button id="reset-prompt-btn" class="secondary">Reset to Default</button>
+        </div>
+        <p id="prompt-status" class="status"></p>
+      </div>
+    </div>
+
+    <div id="error-msg" class="error hidden"></div>
+    <div id="loading" class="loading hidden">
+      <span class="spinner"></span> Processing...
+    </div>
+  </div>
+</body>
+</html>

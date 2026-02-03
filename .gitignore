@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Build output
+src-tauri/target/
+
+# Environment files with secrets
+src-tauri/.env
+
+# Recovered/temporary files
+recovered-assets/
+
+# OS files
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
