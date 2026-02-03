@@ -138,13 +138,13 @@
       50% { transform: scaleY(0.3); }
     }
 
-    /* Body */
+    /* Body - Black shirt */
     .body {
       width: 60px;
       height: 44px;
-      background: linear-gradient(180deg, #5a9fd4 0%, #4a8bc4 100%);
+      background: linear-gradient(180deg, #2a2a2a 0%, #1a1a1a 100%);
       border-radius: 4px 4px 10px 10px;
-      border: 3px solid #3a7bb4;
+      border: 3px solid #333;
       margin-top: -2px;
       display: flex;
       justify-content: center;
@@ -153,10 +153,14 @@
     }
 
     .chest-anchor {
-      font-size: 20px;
-      color: #fff;
-      text-shadow: 0 0 8px rgba(255,255,255,0.5);
-      line-height: 1;
+      width: 24px;
+      height: 24px;
+    }
+
+    .chest-anchor svg {
+      width: 100%;
+      height: 100%;
+      fill: #fff;
     }
 
     /* Label */
@@ -209,7 +213,11 @@
         </div>
       </div>
       <div class="body">
-        <div class="chest-anchor">⚓</div>
+        <div class="chest-anchor">
+          <svg viewBox="456 0 135 126" xmlns="http://www.w3.org/2000/svg">
+            <path d="M528.42.32l.94,49.98s-1.98,28.42,14.31,28.01c16.29-.41,20.48-8.18,20.48-8.18l-9.91-1.64s14.75-6.54,20.26-19.02c0,0,7.27,17.38-2.2,29.45l-2.64-5.93s-5.28,10.02-23.12,17.99c-15.74,7.04-21.88,13.92-23.1,15.44v.31s-.04-.06-.12-.16c-.08.1-.12.16-.12.16v-.31c-1.22-1.52-7.36-8.4-23.1-15.44-17.84-7.98-23.12-17.99-23.12-17.99l-2.64,5.93c-9.47-12.06-2.2-29.45-2.2-29.45,5.5,12.47,20.26,19.02,20.26,19.02l-9.91,1.64s4.18,7.77,20.48,8.18c16.29.41,14.31-28.01,14.31-28.01l.94-49.98c-35.05,2.42-62.67,29.6-62.67,62.76s30.34,62.94,67.77,62.94,67.77-28.18,67.77-62.94S563.47,2.74,528.42.32Z"/>
+          </svg>
+        </div>
       </div>
     </div>
     <div class="label">
