@@ -23,6 +23,9 @@ let customPromptEl, savePromptBtn, resetPromptBtn, promptStatus;
 // DOM elements - Navigation
 let navRecord, navSettings, pageRecord, pageSettings;
 
+// DOM elements - Update
+let updateBanner, updateVersion, updateBtn, dismissUpdateBtn, appVersionEl;
+
 // State
 let isRecording = false;
 let formattedResult = '';
@@ -351,6 +354,41 @@ async function loadSettings() {
   await loadPrompt();
 }
 
+// Update management
+async function checkForUpdate() {
+  try {
+    const update = await invoke('check_for_update');
+    if (update.available) {
+      updateVersion.textContent = `v${update.version}`;
+      updateBanner.classList.remove('hidden');
+    }
+  } catch (err) {
+    console.log('Update check failed:', err);
+  }
+}
+
+async function installUpdate() {
+  updateBtn.textContent = 'Updating...';
+  updateBtn.disabled = true;
+  try {
+    await invoke('install_update');
+    updateBtn.textContent = 'Restarting...';
+  } catch (err) {
+    showError(`Update failed: ${err}`);
+    updateBtn.textContent = 'Update Now';
+    updateBtn.disabled = false;
+  }
+}
+
+async function loadVersion() {
+  try {
+    const version = await invoke('get_version');
+    appVersionEl.textContent = `v${version}`;
+  } catch (err) {
+    console.error('Failed to load version:', err);
+  }
+}
+
 // Initialize
 window.addEventListener("DOMContentLoaded", async () => {
   // Request macOS permissions on startup (triggers permission dialogs if needed)
@@ -394,6 +432,13 @@ window.addEventListener("DOMContentLoaded", async () => {
   navSettings = document.getElementById('nav-settings');
   pageRecord = document.getElementById('page-record');
   pageSettings = document.getElementById('page-settings');
+
+  // Get DOM elements - Update
+  updateBanner = document.getElementById('update-banner');
+  updateVersion = document.getElementById('update-version');
+  updateBtn = document.getElementById('update-btn');
+  dismissUpdateBtn = document.getElementById('dismiss-update');
+  appVersionEl = document.getElementById('app-version');
 
   // Navigation events
   navRecord.addEventListener('click', () => showPage('record'));
@@ -451,6 +496,14 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  // Load settings
+  // Update events
+  updateBtn.addEventListener('click', installUpdate);
+  dismissUpdateBtn.addEventListener('click', () => {
+    updateBanner.classList.add('hidden');
+  });
+
+  // Load settings and check for updates
   await loadSettings();
+  await loadVersion();
+  await checkForUpdate();
 });

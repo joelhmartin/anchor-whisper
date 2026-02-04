@@ -8,9 +8,17 @@
   <script type="module" src="/main.js" defer></script>
 </head>
 <body>
+  <!-- Update Banner -->
+  <div id="update-banner" class="update-banner hidden">
+    <span id="update-message">Update available: <strong id="update-version"></strong></span>
+    <button id="update-btn">Update Now</button>
+    <button id="dismiss-update" class="dismiss-btn">×</button>
+  </div>
+
   <div class="container">
     <header>
       <h1>Anchor Whisper</h1>
+      <span id="app-version" class="app-version"></span>
       <nav>
         <button id="nav-record" class="nav-btn active">Record</button>
         <button id="nav-settings" class="nav-btn">Settings</button>

@@ -501,4 +501,57 @@ button:disabled {
     background: #3a1a1a;
     border-color: #5a2a2a;
   }
+
+  .update-banner {
+    background: linear-gradient(135deg, #1a3a2a 0%, #2a4a3a 100%);
+    border-bottom-color: #3a5a4a;
+  }
+}
+
+/* Update banner */
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: linear-gradient(135deg, #34c759 0%, #30b350 100%);
+  color: white;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.update-banner.hidden {
+  display: none;
+}
+
+.update-banner #update-btn {
+  padding: 6px 12px;
+  background: white;
+  color: #34c759;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.update-banner #update-btn:hover {
+  background: #f0f0f0;
+}
+
+.update-banner .dismiss-btn {
+  padding: 4px 8px;
+  background: transparent;
+  color: white;
+  font-size: 18px;
+  opacity: 0.8;
+}
+
+.update-banner .dismiss-btn:hover {
+  opacity: 1;
+}
+
+.app-version {
+  font-size: 11px;
+  color: #888;
+  margin-left: 8px;
 }

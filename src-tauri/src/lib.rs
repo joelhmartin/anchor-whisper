@@ -8,6 +8,7 @@ use tauri::{
     tray::TrayIconBuilder,
     AppHandle, Manager, State, PhysicalPosition,
 };
+use tauri_plugin_store::StoreExt;
 
 // State for managing audio recording
 pub struct AudioState {
@@ -168,6 +169,55 @@ pub struct TranscriptionResult {
     formatted_text: String,
 }
 
+// Helper to save settings to persistent store
+fn persist_settings(app: &AppHandle, settings: &Settings) -> Result<(), String> {
+    let store = app.store("settings.json").map_err(|e| e.to_string())?;
+    store.set("openai_api_key", settings.openai_api_key.clone().unwrap_or_default());
+    store.set("custom_prompt", settings.custom_prompt.clone());
+    store.set("keywords", serde_json::to_value(&settings.keywords).unwrap_or_default());
+    store.set("hotkey", settings.hotkey.clone());
+    store.set("auto_paste", settings.auto_paste);
+    store.save().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// Helper to load settings from persistent store
+fn load_persisted_settings(app: &AppHandle) -> Settings {
+    let store = match app.store("settings.json") {
+        Ok(s) => s,
+        Err(_) => return Settings::default(),
+    };
+
+    let api_key: Option<String> = store.get("openai_api_key")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .filter(|s| !s.is_empty())
+        .or_else(|| EMBEDDED_API_KEY.map(|s| s.to_string()));
+
+    let custom_prompt: String = store.get("custom_prompt")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| DEFAULT_PROMPT.to_string());
+
+    let keywords: HashMap<String, String> = store.get("keywords")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    let hotkey: String = store.get("hotkey")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "Control+Space".to_string());
+
+    let auto_paste: bool = store.get("auto_paste")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+
+    Settings {
+        openai_api_key: api_key,
+        custom_prompt,
+        keywords,
+        hotkey,
+        auto_paste,
+    }
+}
+
 // Settings commands
 #[tauri::command]
 fn get_settings(app_state: State<AppState>) -> Result<Settings, String> {
@@ -176,17 +226,20 @@ fn get_settings(app_state: State<AppState>) -> Result<Settings, String> {
 }
 
 #[tauri::command]
-fn save_settings(new_settings: Settings, app_state: State<AppState>) -> Result<(), String> {
+fn save_settings(app: AppHandle, new_settings: Settings, app_state: State<AppState>) -> Result<(), String> {
     let mut settings = app_state.settings.lock().map_err(|e| e.to_string())?;
-    *settings = new_settings;
-    Ok(())
+    *settings = new_settings.clone();
+    drop(settings);
+    persist_settings(&app, &new_settings)
 }
 
 #[tauri::command]
-fn set_api_key(key: String, app_state: State<AppState>) -> Result<(), String> {
+fn set_api_key(app: AppHandle, key: String, app_state: State<AppState>) -> Result<(), String> {
     let mut settings = app_state.settings.lock().map_err(|e| e.to_string())?;
     settings.openai_api_key = Some(key);
-    Ok(())
+    let settings_clone = settings.clone();
+    drop(settings);
+    persist_settings(&app, &settings_clone)
 }
 
 #[tauri::command]
@@ -196,10 +249,12 @@ fn get_api_key(app_state: State<AppState>) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-fn set_custom_prompt(prompt: String, app_state: State<AppState>) -> Result<(), String> {
+fn set_custom_prompt(app: AppHandle, prompt: String, app_state: State<AppState>) -> Result<(), String> {
     let mut settings = app_state.settings.lock().map_err(|e| e.to_string())?;
     settings.custom_prompt = prompt;
-    Ok(())
+    let settings_clone = settings.clone();
+    drop(settings);
+    persist_settings(&app, &settings_clone)
 }
 
 #[tauri::command]
@@ -209,24 +264,31 @@ fn get_custom_prompt(app_state: State<AppState>) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn reset_prompt_to_default(app_state: State<AppState>) -> Result<String, String> {
+fn reset_prompt_to_default(app: AppHandle, app_state: State<AppState>) -> Result<String, String> {
     let mut settings = app_state.settings.lock().map_err(|e| e.to_string())?;
     settings.custom_prompt = DEFAULT_PROMPT.to_string();
+    let settings_clone = settings.clone();
+    drop(settings);
+    persist_settings(&app, &settings_clone)?;
     Ok(DEFAULT_PROMPT.to_string())
 }
 
 #[tauri::command]
-fn add_keyword(spoken: String, replacement: String, app_state: State<AppState>) -> Result<(), String> {
+fn add_keyword(app: AppHandle, spoken: String, replacement: String, app_state: State<AppState>) -> Result<(), String> {
     let mut settings = app_state.settings.lock().map_err(|e| e.to_string())?;
     settings.keywords.insert(spoken.to_lowercase(), replacement);
-    Ok(())
+    let settings_clone = settings.clone();
+    drop(settings);
+    persist_settings(&app, &settings_clone)
 }
 
 #[tauri::command]
-fn remove_keyword(spoken: String, app_state: State<AppState>) -> Result<(), String> {
+fn remove_keyword(app: AppHandle, spoken: String, app_state: State<AppState>) -> Result<(), String> {
     let mut settings = app_state.settings.lock().map_err(|e| e.to_string())?;
     settings.keywords.remove(&spoken.to_lowercase());
-    Ok(())
+    let settings_clone = settings.clone();
+    drop(settings);
+    persist_settings(&app, &settings_clone)
 }
 
 #[tauri::command]
@@ -236,10 +298,12 @@ fn get_keywords(app_state: State<AppState>) -> Result<HashMap<String, String>, S
 }
 
 #[tauri::command]
-fn set_hotkey(hotkey: String, app_state: State<AppState>) -> Result<(), String> {
+fn set_hotkey(app: AppHandle, hotkey: String, app_state: State<AppState>) -> Result<(), String> {
     let mut settings = app_state.settings.lock().map_err(|e| e.to_string())?;
     settings.hotkey = hotkey;
-    Ok(())
+    let settings_clone = settings.clone();
+    drop(settings);
+    persist_settings(&app, &settings_clone)
 }
 
 #[tauri::command]
@@ -249,69 +313,109 @@ fn get_hotkey(app_state: State<AppState>) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn set_auto_paste(enabled: bool, app_state: State<AppState>) -> Result<(), String> {
+fn set_auto_paste(app: AppHandle, enabled: bool, app_state: State<AppState>) -> Result<(), String> {
     let mut settings = app_state.settings.lock().map_err(|e| e.to_string())?;
     settings.auto_paste = enabled;
-    Ok(())
+    let settings_clone = settings.clone();
+    drop(settings);
+    persist_settings(&app, &settings_clone)
 }
 
-// Text injection - types text at cursor position using AppleScript on macOS
+// Text injection - types text at cursor position
 #[tauri::command]
 fn inject_text(text: String) -> Result<(), String> {
-    // Escape special characters for AppleScript
-    let escaped = text
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n");
+    #[cfg(target_os = "macos")]
+    {
+        // Escape special characters for AppleScript
+        let escaped = text
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n");
 
-    // Use AppleScript to type the text
-    let script = format!(
-        r#"
-        set the clipboard to "{}"
-        tell application "System Events"
-            keystroke "v" using command down
-        end tell
-        "#,
-        escaped
-    );
+        // Use AppleScript to type the text
+        let script = format!(
+            r#"
+            set the clipboard to "{}"
+            tell application "System Events"
+                keystroke "v" using command down
+            end tell
+            "#,
+            escaped
+        );
 
-    Command::new("osascript")
-        .arg("-e")
-        .arg(&script)
-        .output()
-        .map_err(|e| format!("Failed to inject text: {}", e))?;
+        Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()
+            .map_err(|e| format!("Failed to inject text: {}", e))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Use PowerShell to set clipboard and simulate Ctrl+V
+        let escaped = text.replace("\"", "`\"").replace("$", "`$");
+        let script = format!(
+            r#"Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Clipboard]::SetText("{}"); Start-Sleep -Milliseconds 100; [System.Windows.Forms.SendKeys]::SendWait("^v")"#,
+            escaped
+        );
+
+        Command::new("powershell")
+            .args(["-Command", &script])
+            .output()
+            .map_err(|e| format!("Failed to inject text: {}", e))?;
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        // Linux: use xdotool or xclip
+        Command::new("sh")
+            .args(["-c", &format!("echo -n '{}' | xclip -selection clipboard && xdotool key ctrl+v", text.replace("'", "'\\''"))])
+            .output()
+            .map_err(|e| format!("Failed to inject text: {}", e))?;
+    }
 
     Ok(())
 }
 
-// Request necessary macOS permissions (Accessibility for keyboard/paste, Screen Recording for multi-monitor)
+// Request necessary permissions (macOS-specific, no-op on other platforms)
 #[tauri::command]
 fn request_permissions() -> Result<(), String> {
-    // Trigger Accessibility permission by attempting to use System Events
-    let accessibility_script = r#"
-        tell application "System Events"
-            return name of first process
-        end tell
-    "#;
-    let _ = Command::new("osascript")
-        .arg("-e")
-        .arg(accessibility_script)
-        .output();
+    // Trigger Microphone permission by briefly accessing the audio input device
+    std::thread::spawn(|| {
+        let host = cpal::default_host();
+        if let Some(device) = host.default_input_device() {
+            // Just getting the device config is enough to trigger the permission dialog
+            let _ = device.default_input_config();
+        }
+    });
 
-    // Trigger Screen Recording permission by trying to get window list
-    let screen_script = r#"
-        use framework "Foundation"
-        use framework "AppKit"
-        use framework "CoreGraphics"
+    #[cfg(target_os = "macos")]
+    {
+        // Trigger Accessibility permission by attempting to use System Events
+        let accessibility_script = r#"
+            tell application "System Events"
+                return name of first process
+            end tell
+        "#;
+        let _ = Command::new("osascript")
+            .arg("-e")
+            .arg(accessibility_script)
+            .output();
 
-        -- This triggers the screen recording permission dialog
-        set windowList to current application's CGWindowListCopyWindowInfo(current application's kCGWindowListOptionOnScreenOnly, current application's kCGNullWindowID)
-        return "ok"
-    "#;
-    let _ = Command::new("osascript")
-        .arg("-e")
-        .arg(screen_script)
-        .output();
+        // Trigger Screen Recording permission by trying to get window list
+        let screen_script = r#"
+            use framework "Foundation"
+            use framework "AppKit"
+            use framework "CoreGraphics"
+
+            set windowList to current application's CGWindowListCopyWindowInfo(current application's kCGWindowListOptionOnScreenOnly, current application's kCGNullWindowID)
+            return "ok"
+        "#;
+        let _ = Command::new("osascript")
+            .arg("-e")
+            .arg(screen_script)
+            .output();
+    }
 
     Ok(())
 }
@@ -430,6 +534,7 @@ fn show_overlay(app: AppHandle) -> Result<(), String> {
 }
 
 // Simple helper to get just the cursor X position for monitor detection
+#[cfg(target_os = "macos")]
 fn get_cursor_x_position() -> Option<(i32, i32)> {
     let script = r#"
         use framework "Foundation"
@@ -448,6 +553,13 @@ fn get_cursor_x_position() -> Option<(i32, i32)> {
     let result = String::from_utf8_lossy(&output.stdout);
     let x = result.trim().parse::<i32>().ok()?;
     Some((x, 0))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn get_cursor_x_position() -> Option<(i32, i32)> {
+    // On non-macOS, we don't have an easy way to get cursor position
+    // The overlay will just use the primary monitor
+    None
 }
 
 #[tauri::command]
@@ -636,7 +748,9 @@ async fn transcribe_audio(
     let processed_text = apply_keywords(&raw_text, &keywords);
 
     // Format with GPT using custom prompt
+    println!("Calling GPT for formatting...");
     let formatted_text = format_with_gpt(&api_key, &processed_text, &custom_prompt, &keywords).await?;
+    println!("GPT formatting complete: {} chars", formatted_text.len());
 
     Ok(TranscriptionResult {
         raw_text,
@@ -785,15 +899,73 @@ async fn format_with_gpt(
         .ok_or_else(|| "No response from AI".to_string())
 }
 
+// Update info response
+#[derive(Serialize, Clone)]
+pub struct UpdateInfo {
+    available: bool,
+    version: Option<String>,
+    body: Option<String>,
+}
+
+// Check for updates
+#[tauri::command]
+async fn check_for_update(app: AppHandle) -> Result<UpdateInfo, String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let updater = app.updater().map_err(|e| e.to_string())?;
+
+    match updater.check().await {
+        Ok(Some(update)) => Ok(UpdateInfo {
+            available: true,
+            version: Some(update.version.clone()),
+            body: update.body.clone(),
+        }),
+        Ok(None) => Ok(UpdateInfo {
+            available: false,
+            version: None,
+            body: None,
+        }),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+// Install update
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let updater = app.updater().map_err(|e| e.to_string())?;
+
+    if let Some(update) = updater.check().await.map_err(|e| e.to_string())? {
+        update.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+// Get current version
+#[tauri::command]
+fn get_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AudioState::default())
         .manage(AppState::default())
         .setup(|app| {
+            // Load persisted settings
+            let persisted = load_persisted_settings(app.handle());
+            let app_state: State<AppState> = app.state();
+            if let Ok(mut settings) = app_state.settings.lock() {
+                *settings = persisted;
+            }
+
             // Create system tray
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let show = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
@@ -846,6 +1018,10 @@ pub fn run() {
             hide_overlay,
             // Permissions
             request_permissions,
+            // Updates
+            check_for_update,
+            install_update,
+            get_version,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
