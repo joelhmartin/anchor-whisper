@@ -1,6 +1,6 @@
 [package]
 name = "anchor-whisper"
-version = "0.1.0"
+version = "0.1.1"
 description = "Voice-to-text with AI formatting"
 authors = ["you"]
 edition = "2021"
