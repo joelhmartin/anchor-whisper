@@ -325,35 +325,45 @@ fn set_auto_paste(app: AppHandle, enabled: bool, app_state: State<AppState>) -> 
 #[tauri::command]
 fn inject_text(text: String) -> Result<(), String> {
     use arboard::Clipboard;
-    use enigo::{Enigo, Keyboard, Settings};
 
     // Set clipboard
     let mut clipboard = Clipboard::new().map_err(|e| format!("Clipboard error: {}", e))?;
     clipboard.set_text(&text).map_err(|e| format!("Failed to set clipboard: {}", e))?;
 
-    // Small delay to ensure clipboard is ready
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    // Spawn a thread to send the keystroke after a delay
+    // This allows the Tauri window to lose focus first
+    std::thread::spawn(move || {
+        use enigo::{Enigo, Keyboard, Settings};
 
-    // Simulate paste keystroke
-    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| format!("Enigo error: {}", e))?;
+        // Wait for focus to return to the previous app
+        std::thread::sleep(std::time::Duration::from_millis(150));
 
-    #[cfg(target_os = "macos")]
-    {
-        use enigo::Key;
-        // Cmd+V on macOS
-        enigo.key(Key::Meta, enigo::Direction::Press).map_err(|e| format!("Key error: {}", e))?;
-        enigo.key(Key::Unicode('v'), enigo::Direction::Click).map_err(|e| format!("Key error: {}", e))?;
-        enigo.key(Key::Meta, enigo::Direction::Release).map_err(|e| format!("Key error: {}", e))?;
-    }
+        let mut enigo = match Enigo::new(&Settings::default()) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("Enigo error: {}", e);
+                return;
+            }
+        };
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        use enigo::Key;
-        // Ctrl+V on Windows/Linux
-        enigo.key(Key::Control, enigo::Direction::Press).map_err(|e| format!("Key error: {}", e))?;
-        enigo.key(Key::Unicode('v'), enigo::Direction::Click).map_err(|e| format!("Key error: {}", e))?;
-        enigo.key(Key::Control, enigo::Direction::Release).map_err(|e| format!("Key error: {}", e))?;
-    }
+        #[cfg(target_os = "macos")]
+        {
+            use enigo::Key;
+            // Cmd+V on macOS
+            let _ = enigo.key(Key::Meta, enigo::Direction::Press);
+            let _ = enigo.key(Key::Unicode('v'), enigo::Direction::Click);
+            let _ = enigo.key(Key::Meta, enigo::Direction::Release);
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            use enigo::Key;
+            // Ctrl+V on Windows/Linux
+            let _ = enigo.key(Key::Control, enigo::Direction::Press);
+            let _ = enigo.key(Key::Unicode('v'), enigo::Direction::Click);
+            let _ = enigo.key(Key::Control, enigo::Direction::Release);
+        }
+    });
 
     Ok(())
 }
