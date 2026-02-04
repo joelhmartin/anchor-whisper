@@ -1,6 +1,6 @@
 [package]
 name = "anchor-whisper"
-version = "0.1.1"
+version = "0.1.2"
 description = "Voice-to-text with AI formatting"
 authors = ["you"]
 edition = "2021"
@@ -19,6 +19,8 @@ tauri-plugin-opener = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-store = "2"
 tauri-plugin-updater = "2"
+arboard = "3"
+enigo = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

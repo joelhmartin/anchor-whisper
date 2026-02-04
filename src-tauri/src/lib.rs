@@ -3,8 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -323,82 +321,38 @@ fn set_auto_paste(app: AppHandle, enabled: bool, app_state: State<AppState>) -> 
     persist_settings(&app, &settings_clone)
 }
 
-// Text injection - types text at cursor position
+// Text injection - copies text to clipboard and simulates paste
 #[tauri::command]
 fn inject_text(text: String) -> Result<(), String> {
+    use arboard::Clipboard;
+    use enigo::{Enigo, Keyboard, Settings};
+
+    // Set clipboard
+    let mut clipboard = Clipboard::new().map_err(|e| format!("Clipboard error: {}", e))?;
+    clipboard.set_text(&text).map_err(|e| format!("Failed to set clipboard: {}", e))?;
+
+    // Small delay to ensure clipboard is ready
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // Simulate paste keystroke
+    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| format!("Enigo error: {}", e))?;
+
     #[cfg(target_os = "macos")]
     {
-        // Escape special characters for AppleScript
-        let escaped = text
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"")
-            .replace('\n', "\\n");
-
-        // Use AppleScript to type the text
-        let script = format!(
-            r#"
-            set the clipboard to "{}"
-            tell application "System Events"
-                keystroke "v" using command down
-            end tell
-            "#,
-            escaped
-        );
-
-        Command::new("osascript")
-            .arg("-e")
-            .arg(&script)
-            .output()
-            .map_err(|e| format!("Failed to inject text: {}", e))?;
+        use enigo::Key;
+        // Cmd+V on macOS
+        enigo.key(Key::Meta, enigo::Direction::Press).map_err(|e| format!("Key error: {}", e))?;
+        enigo.key(Key::Unicode('v'), enigo::Direction::Click).map_err(|e| format!("Key error: {}", e))?;
+        enigo.key(Key::Meta, enigo::Direction::Release).map_err(|e| format!("Key error: {}", e))?;
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(not(target_os = "macos"))]
     {
-        // Use PowerShell with SendInput API for reliable cross-app paste
-        let escaped = text.replace("\"", "`\"").replace("$", "`$").replace("`", "``");
-        let script = format!(
-            r#"
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public class KeyboardSend {{
-    [DllImport("user32.dll", SetLastError = true)]
-    static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-
-    const byte VK_CONTROL = 0x11;
-    const byte VK_V = 0x56;
-    const uint KEYEVENTF_KEYUP = 0x0002;
-
-    public static void SendCtrlV() {{
-        keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
-        keybd_event(VK_V, 0, 0, UIntPtr.Zero);
-        keybd_event(VK_V, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-    }}
-}}
-"@
-[System.Windows.Forms.Clipboard]::SetText("{}")
-Start-Sleep -Milliseconds 50
-[KeyboardSend]::SendCtrlV()
-"#,
-            escaped
-        );
-
-        Command::new("powershell")
-            .args(["-Command", &script])
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .output()
-            .map_err(|e| format!("Failed to inject text: {}", e))?;
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        // Linux: use xdotool or xclip
-        Command::new("sh")
-            .args(["-c", &format!("echo -n '{}' | xclip -selection clipboard && xdotool key ctrl+v", text.replace("'", "'\\''"))])
-            .output()
-            .map_err(|e| format!("Failed to inject text: {}", e))?;
+        use enigo::Key;
+        // Ctrl+V on Windows/Linux
+        enigo.key(Key::Control, enigo::Direction::Press).map_err(|e| format!("Key error: {}", e))?;
+        enigo.key(Key::Unicode('v'), enigo::Direction::Click).map_err(|e| format!("Key error: {}", e))?;
+        enigo.key(Key::Control, enigo::Direction::Release).map_err(|e| format!("Key error: {}", e))?;
     }
 
     Ok(())
