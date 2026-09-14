@@ -60,5 +60,75 @@ test("apply_replacements replaces every occurrence", function()
   eq(core.apply_replacements("kinsta then kinsta", { ["kinsta"] = "Kinsta" }), "Kinsta then Kinsta")
 end)
 
+-- LineBuffer ----------------------------------------------------------------
+
+test("LineBuffer returns only complete lines and keeps the remainder", function()
+  local b = core.LineBuffer.new()
+  local lines = b:push('{"a":1}\n{"b":')
+  eq(#lines, 1, "first push count"); eq(lines[1], '{"a":1}')
+  lines = b:push('2}\n\n{"c":3}\n')
+  eq(#lines, 2, "second push count"); eq(lines[1], '{"b":2}'); eq(lines[2], '{"c":3}')
+  eq(#b:push(""), 0, "empty push")
+end)
+
+test("LineBuffer strips carriage returns", function()
+  local b = core.LineBuffer.new()
+  eq(b:push("x\r\n")[1], "x")
+end)
+
+-- encode/decode -------------------------------------------------------------
+
+test("encode_request produces a single stream-json user line", function()
+  local json = require("json")
+  local line = core.encode_request('say "hi"\nnow')
+  eq(line:sub(-1), "\n", "trailing newline")
+  local ev = json.decode(line)
+  eq(ev.type, "user"); eq(ev.message.role, "user"); eq(ev.message.content, 'say "hi"\nnow')
+end)
+
+test("decode_event returns nil for garbage and a table for json", function()
+  eq(core.decode_event("not json"), nil)
+  eq(core.decode_event(""), nil)
+  eq(core.decode_event('{"type":"system","subtype":"init"}').subtype, "init")
+end)
+
+test("decode_result extracts success text", function()
+  local status, text = core.decode_result({ type = "result", subtype = "success", is_error = false, result = "Clean." })
+  eq(status, "success"); eq(text, "Clean.")
+end)
+
+test("decode_result reports errors", function()
+  local status, label = core.decode_result({ type = "result", subtype = "error_during_execution", is_error = true })
+  eq(status, "error"); eq(label, "error_during_execution")
+  status = core.decode_result({ type = "result", subtype = "success", is_error = true, result = "x" })
+  eq(status, "error")
+end)
+
+test("decode_result ignores non-result events", function()
+  eq(core.decode_result({ type = "assistant" }), nil)
+end)
+
+-- prompt builders -----------------------------------------------------------
+
+test("build_system_prompt returns base unchanged without dictionary", function()
+  eq(core.build_system_prompt("BASE", nil), "BASE")
+  eq(core.build_system_prompt("BASE", { terms = {}, replacements = {} }), "BASE")
+end)
+
+test("build_system_prompt appends vocabulary and replacements", function()
+  local p = core.build_system_prompt("BASE", { terms = { "Kinsta", "Anchor Corps" }, replacements = { ["call rail"] = "CallRail" } })
+  assert(p:find("^BASE\n\n"), "starts with base")
+  assert(p:find("Vocabulary", 1, true), "has vocabulary header")
+  assert(p:find("- Kinsta", 1, true) and p:find("- Anchor Corps", 1, true), "lists terms")
+  assert(p:find('"call rail" -> "CallRail"', 1, true), "lists replacement")
+end)
+
+test("build_whisper_prompt joins terms within a length budget", function()
+  eq(core.build_whisper_prompt({ "Kinsta", "Anchor Corps", "WordPress" }, 100), "Kinsta, Anchor Corps, WordPress")
+  eq(core.build_whisper_prompt({ "Kinsta", "Anchor Corps", "WordPress" }, 15), "Kinsta")
+  eq(core.build_whisper_prompt(nil, 100), "")
+  eq(core.build_whisper_prompt({}, 100), "")
+end)
+
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)
