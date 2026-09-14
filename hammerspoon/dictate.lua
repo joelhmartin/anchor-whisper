@@ -254,10 +254,22 @@ local function adopt(entry)
   if old and old ~= entry and old.task:isRunning() then old.task:terminate() end
 end
 
+-- A 200 on the target port is not proof this entry's own process answered it:
+-- something else (another server, a leftover process) may be squatting on the
+-- port while whisper-server is still loading its model. whisper-server
+-- identifies itself via a "Server: whisper.cpp" header and its HTML title, so
+-- check that before trusting readiness.
+local function is_whisper_server(status, body, headers)
+  if status ~= 200 then return false end
+  local server = headers and (headers.Server or headers.server)
+  if server == "whisper.cpp" then return true end
+  return type(body) == "string" and body:find("Whisper.cpp Server", 1, true) ~= nil
+end
+
 local function probe(entry, deadline)
-  hs.http.asyncGet(string.format("http://127.0.0.1:%d/", entry.port), nil, function(status)
+  hs.http.asyncGet(string.format("http://127.0.0.1:%d/", entry.port), nil, function(status, body, headers)
     if not entry.task:isRunning() then return end
-    if status == 200 then
+    if is_whisper_server(status, body, headers) then
       if whisper.pending == entry then whisper.pending = nil end
       adopt(entry)
       return
