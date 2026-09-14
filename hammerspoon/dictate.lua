@@ -277,8 +277,19 @@ start_server = function(port)
   local args = { "-m", cfg.whisper_model, "--host", "127.0.0.1", "--port", tostring(port), "-l", "en", "-nt" }
   entry.task = hs.task.new(cfg.whisper_server_bin, function(code, _, stderr)
     log.w(string.format("whisper-server (port %d) exited (code %s): %s", port, tostring(code), (stderr or ""):sub(1, 300)))
-    if whisper.pending == entry then whisper.pending = nil end
-    if whisper.active ~= entry then return end -- a retired or failed-pending server
+    local was_pending = (whisper.pending == entry)
+    if was_pending then whisper.pending = nil end
+    if whisper.active ~= entry then
+      if was_pending then
+        whisper.attempts = whisper.attempts + 1
+        if whisper.attempts <= 3 then
+          later(2, function() if not whisper.pending then whisper.pending = start_server(port) end end)
+        else
+          log.e("whisper-server keeps failing to start; using whisper-cli until 'Restart Whisper server'")
+        end
+      end
+      return -- a retired server; nothing to do
+    end
     whisper.active = nil
     whisper.ready = false
     whisper.attempts = whisper.attempts + 1
@@ -413,6 +424,7 @@ end
 -- when the server is not ready or the request fails.
 local function transcribe_server(wav, on_done)
   local done = false
+  local target = whisper.active
   local args = { "-s", "-m", tostring(cfg.whisper_request_timeout_s), "-X", "POST", whisper_url("/inference"),
     "-F", "file=@" .. wav, "--form-string", "response_format=json", "--form-string", "temperature=0.0" }
   if WHISPER_PROMPT ~= "" then
@@ -424,8 +436,10 @@ local function transcribe_server(wav, on_done)
     local text = (code == 0) and core.parse_server_response(stdout) or nil
     if text == nil then
       log.w(string.format("whisper-server request failed (code %s); falling back to whisper-cli", tostring(code)))
-      whisper.ready = false
-      M.restart_whisper()
+      if whisper.active == target then
+        whisper.ready = false
+        M.restart_whisper()
+      end
       transcribe_cli(wav, on_done)
       return
     end
