@@ -48,10 +48,27 @@ end
 -- Claude worker ---------------------------------------------------------------
 -- One long-lived `claude -p` in stream-json mode. Each request is one user
 -- message on stdin; the reply is the `result` event on stdout.
-local worker = nil          -- current worker table
+local worker = nil          -- the warm worker serving requests
+local pending_worker = nil  -- a replacement that is booting/warming
 local worker_generation = 0
 local respawn_attempts = 0
 local last_used = os.time()
+
+-- Hammerspoon garbage-collects unreferenced timers, so every one-shot timer
+-- is held here until it fires.
+local timers = {}
+local function later(seconds, fn)
+  local t
+  t = hs.timer.doAfter(seconds, function()
+    timers[t] = nil
+    fn()
+  end)
+  timers[t] = true
+  return t
+end
+
+local spawn_worker   -- forward declaration
+local recycle_worker -- forward declaration
 
 local function worker_args()
   return {
@@ -91,33 +108,39 @@ local function send(w, text, cb)
   p.timer = hs.timer.doAfter(cfg.request_timeout_s, function()
     if w.pending == p then
       w.pending = nil
+      w.ready = false -- stop routing to a worker that may be hung
       log.w("worker request timed out")
       cb(false, "timeout")
-      M.restart_worker()
+      recycle_worker("request timeout")
     end
   end)
   w.pending = p
   w.task:setInput(core.encode_request(text))
 end
 
-local spawn_worker -- forward declaration
+local function schedule_respawn(on_ready)
+  respawn_attempts = respawn_attempts + 1
+  if respawn_attempts > 3 then
+    hs.alert.show("Dictation: Claude worker will not start. See Hammerspoon console.")
+    return
+  end
+  later(2, function() spawn_worker(on_ready) end)
+end
 
 local function on_worker_exit(w, code, _, stderr)
   if w.pending then fail_pending(w, "exited") end
-  if worker ~= w then return end -- an old worker being retired; nothing to do
-  log.w(string.format("worker exited (code %s): %s", tostring(code), (stderr or ""):sub(1, 300)))
-  worker = nil
-  respawn_attempts = respawn_attempts + 1
-  if respawn_attempts > 3 then
-    hs.alert.show("Dictation: Claude worker keeps dying. See Hammerspoon console.")
-    return
-  end
-  hs.timer.doAfter(2, function() spawn_worker() end)
+  if w ~= worker and w ~= pending_worker then return end -- retired worker; nothing to do
+  log.w(string.format("worker gen %d exited (code %s): %s", w.gen, tostring(code), (stderr or ""):sub(1, 300)))
+  if w == worker then worker = nil end
+  if w == pending_worker then pending_worker = nil end
+  schedule_respawn(w.on_ready)
 end
 
 spawn_worker = function(on_ready)
+  if pending_worker then return pending_worker end -- one boot at a time
   worker_generation = worker_generation + 1
-  local w = { requests = 0, ready = false, pending = nil, buf = core.LineBuffer.new(), gen = worker_generation }
+  local w = { requests = 0, ready = false, pending = nil, buf = core.LineBuffer.new(),
+              gen = worker_generation, on_ready = on_ready }
   w.task = hs.task.new(cfg.claude_bin,
     function(code, out, err) on_worker_exit(w, code, out, err) end,
     function(_, stdout, _)
@@ -132,37 +155,36 @@ spawn_worker = function(on_ready)
     hs.alert.show("Dictation: could not start Claude worker")
     return nil
   end
-  worker = w
-  -- Warm it so the first real request gets the fast path.
+  pending_worker = w
+  -- Warm it so the first real request gets the fast path. The worker starts
+  -- serving only once warm; until then `worker` keeps pointing at the old one.
   send(w, "warm up", function(ok, label)
     if not ok then
       log.w("warm-up failed (" .. tostring(label) .. ")")
-      respawn_attempts = respawn_attempts + 1
+      if pending_worker == w then pending_worker = nil end
       if w.task:isRunning() then w.task:terminate() end
-      if worker == w then worker = nil end
-      if respawn_attempts <= 3 then
-        hs.timer.doAfter(2, function() spawn_worker(on_ready) end)
-      else
-        hs.alert.show("Dictation: Claude worker will not start. See Hammerspoon console.")
-      end
+      schedule_respawn(on_ready)
       return
     end
     w.ready = true
+    w.requests = 0 -- the warm-up does not count toward the request cap
     respawn_attempts = 0
+    pending_worker = nil
+    worker = w
     log.i(string.format("worker gen %d ready (model %s)", w.gen, cfg.claude_model))
     if on_ready then on_ready(w) end
   end)
   return w
 end
 
--- Boot a replacement first, then retire the old one, so nobody waits on startup.
-local function recycle_worker(reason)
+-- Boot and warm a replacement first, then retire the old one, so nobody waits
+-- on startup. If the replacement never warms, the old worker keeps serving.
+recycle_worker = function(reason)
+  if pending_worker then return end
   local old = worker
   log.i("recycling worker: " .. reason)
-  spawn_worker(function()
-    if old and old ~= worker and old.task and old.task:isRunning() then
-      old.task:terminate()
-    end
+  spawn_worker(function(neww)
+    if old and old ~= neww and old.task:isRunning() then old.task:terminate() end
   end)
 end
 
@@ -175,7 +197,7 @@ function M.cleanup(text, cb)
   last_used = os.time()
   if not worker or not worker.ready then
     cb(false, "worker not ready")
-    if not worker then spawn_worker() end
+    if not worker and not pending_worker then spawn_worker() end
     return
   end
   local w = worker
