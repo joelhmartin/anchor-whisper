@@ -130,5 +130,18 @@ test("build_whisper_prompt joins terms within a length budget", function()
   eq(core.build_whisper_prompt({}, 100), "")
 end)
 
+test("apply_replacements ignores an empty key instead of hanging", function()
+  eq(core.apply_replacements("abc", { [""] = "x" }), "abc")
+end)
+
+test("apply_replacements passes non-ASCII bytes through untouched", function()
+  eq(core.apply_replacements("café anchor", { ["anchor"] = "Anchor" }), "café Anchor")
+end)
+
+test("build_whisper_prompt fits an exact budget", function()
+  eq(core.build_whisper_prompt({ "abc", "de" }, 7), "abc, de")
+  eq(core.build_whisper_prompt({ "abc", "de" }, 6), "abc")
+end)
+
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

@@ -23,7 +23,7 @@ end
 function core.apply_replacements(text, replacements)
   if not replacements or next(replacements) == nil then return text end
   local keys = {}
-  for k in pairs(replacements) do keys[#keys + 1] = k end
+  for k in pairs(replacements) do if k ~= "" then keys[#keys + 1] = k end end
   table.sort(keys, function(a, b) return #a > #b end)
   for _, key in ipairs(keys) do
     local needle = key:lower()

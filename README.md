@@ -24,6 +24,11 @@ Control+Option, it may start its own recording as you press the chord; change
 its shortcut or quit it. To use a normal key chord instead, add `key = "space"`
 to `hotkey` in `hammerspoon/dictate_config.lua`.
 
+The module lives in this repo on the external drive and is symlinked into
+`~/.hammerspoon`. If the drive is not mounted, dictation is unavailable and
+Hammerspoon logs a `require` error for `dictate`, but the other hotkeys keep
+working.
+
 ## Switching the Claude model
 
 Edit `claude_model` in `hammerspoon/dictate_config.lua` (`sonnet`, `haiku`,
@@ -55,6 +60,9 @@ dictate.debug_text("um so send the the report to bob")   -- cleanup + paste only
 dictate.debug_run("/path/to/16k-mono.wav")                -- transcribe + cleanup + paste
 dictate.restart_worker()
 ```
+
+A stuck recording is stopped automatically after two minutes, and a stuck
+transcription is killed after one.
 
 Tests for the pure logic: `tests/run.sh`.
 

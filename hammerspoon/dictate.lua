@@ -28,7 +28,7 @@ end
 local SYSTEM_PROMPT = core.build_system_prompt(cfg.prompt, dictionary)
 local WHISPER_PROMPT = core.build_whisper_prompt(dictionary.terms, cfg.whisper_prompt_max_chars)
 
-hs.fs.mkdir(cfg.work_dir)
+hs.execute("mkdir -p '" .. cfg.work_dir .. "'")
 
 local M = {}
 
@@ -137,7 +137,13 @@ local function on_worker_exit(w, code, _, stderr)
 end
 
 spawn_worker = function(on_ready)
-  if pending_worker then return pending_worker end -- one boot at a time
+  if pending_worker then
+    if on_ready then
+      local prev = pending_worker.on_ready
+      pending_worker.on_ready = function(w) if prev then prev(w) end on_ready(w) end
+    end
+    return pending_worker
+  end
   worker_generation = worker_generation + 1
   local w = { requests = 0, ready = false, pending = nil, buf = core.LineBuffer.new(),
               gen = worker_generation, on_ready = on_ready }
@@ -163,7 +169,7 @@ spawn_worker = function(on_ready)
       log.w("warm-up failed (" .. tostring(label) .. ")")
       if pending_worker == w then pending_worker = nil end
       if w.task:isRunning() then w.task:terminate() end
-      schedule_respawn(on_ready)
+      schedule_respawn(w.on_ready)
       return
     end
     w.ready = true
@@ -172,7 +178,7 @@ spawn_worker = function(on_ready)
     pending_worker = nil
     worker = w
     log.i(string.format("worker gen %d ready (model %s)", w.gen, cfg.claude_model))
-    if on_ready then on_ready(w) end
+    if w.on_ready then w.on_ready(w) end
   end)
   return w
 end
@@ -189,6 +195,7 @@ recycle_worker = function(reason)
 end
 
 function M.restart_worker()
+  respawn_attempts = 0
   recycle_worker("manual restart")
 end
 
@@ -197,7 +204,7 @@ function M.cleanup(text, cb)
   last_used = os.time()
   if not worker or not worker.ready then
     cb(false, "worker not ready")
-    if not worker and not pending_worker then spawn_worker() end
+    if (not worker or not worker.ready) and not pending_worker then spawn_worker() end
     return
   end
   local w = worker
@@ -211,7 +218,7 @@ end
 
 -- Idle recycle so a stale worker does not hold hours-old context.
 local idle_timer = hs.timer.doEvery(60, function()
-  if worker and worker.requests > 1 and (os.time() - last_used) > cfg.worker_idle_seconds then
+  if worker and worker.requests > 0 and (os.time() - last_used) > cfg.worker_idle_seconds then
     recycle_worker("idle")
     last_used = os.time()
   end
@@ -264,7 +271,10 @@ end
 local function deliver(text)
   local final = core.apply_replacements(text, dictionary.replacements)
   if final ~= "" then
-    paste.insert(final, { restore = false })
+    if not paste.insert(final, { restore = false }) then
+      hs.pasteboard.setContents(final)
+      alert("Copied to clipboard instead")
+    end
   end
   finish()
 end
@@ -289,7 +299,11 @@ local function transcribe(wav, on_done)
   if WHISPER_PROMPT ~= "" then
     args[#args + 1] = "--prompt"; args[#args + 1] = WHISPER_PROMPT
   end
-  local t = hs.task.new(cfg.whisper_bin, function(code, stdout, stderr)
+  local done = false
+  local t
+  t = hs.task.new(cfg.whisper_bin, function(code, stdout, stderr)
+    if done then return end
+    done = true
     if code ~= 0 then
       log.e("whisper-cli failed: " .. (stderr or ""):sub(1, 400))
       alert("Transcription failed. See Hammerspoon console.")
@@ -300,9 +314,19 @@ local function transcribe(wav, on_done)
   end, args)
   t:setEnvironment(child_env())
   if not t:start() then
+    done = true
     alert("Could not start whisper-cli at " .. cfg.whisper_bin)
     on_done(nil)
+    return
   end
+  later(cfg.transcribe_timeout_s, function()
+    if done then return end
+    done = true
+    log.e("whisper-cli timed out after " .. cfg.transcribe_timeout_s .. "s")
+    if t:isRunning() then t:terminate() end
+    alert("Transcription timed out")
+    on_done(nil)
+  end)
 end
 
 local function run_pipeline(wav)
@@ -323,6 +347,7 @@ local recorder = nil
 local pressed_at = nil
 local wav_path = nil
 local discard = false
+local stop_recording -- forward declaration; start_recording's watchdog calls it
 
 local function wav_has_audio(path)
   local attrs = hs.fs.attributes(path)
@@ -365,9 +390,29 @@ local function start_recording(quiet)
     return
   end
   set_phase("recording")
+  later(cfg.record_max_s, function()
+    if phase ~= "recording" or not recorder then return end
+    log.w("recording exceeded " .. cfg.record_max_s .. "s; stopping")
+    alert("Recording stopped: too long")
+    stop_recording()
+    later(5, function()
+      if phase == "recording" and recorder and recorder:isRunning() then
+        recorder:terminate() -- rec ignored SIGINT
+      end
+      later(5, function()
+        if phase == "recording" then -- exit callback never came; give up
+          log.e("rec did not exit; resetting")
+          recorder = nil
+          if wav_path then os.remove(wav_path) end
+          wav_path = nil
+          finish()
+        end
+      end)
+    end)
+  end)
 end
 
-local function stop_recording()
+stop_recording = function()
   if phase ~= "recording" or not recorder then return end
   local held_ms = (hs.timer.secondsSinceEpoch() - pressed_at) * 1000
   if held_ms < cfg.min_hold_ms then discard = true end
@@ -375,35 +420,50 @@ local function stop_recording()
 end
 
 -- Trigger ---------------------------------------------------------------------
-local function flags_match(flags)
-  local want = {}
-  for _, m in ipairs(cfg.hotkey.mods) do want[m] = true end
-  for _, m in ipairs({ "cmd", "alt", "ctrl", "shift", "fn" }) do
-    if (flags[m] or false) ~= (want[m] or false) then return false end
-  end
-  return true
-end
-
 if cfg.hotkey.key then
   M._hotkey = hs.hotkey.bind(cfg.hotkey.mods, cfg.hotkey.key, function() start_recording(false) end, stop_recording)
 else
   -- Modifier-only hold: record while exactly cfg.hotkey.mods are down.
   local chord_down = false
+  local want_mods = {}
+  for _, m in ipairs(cfg.hotkey.mods) do want_mods[m] = true end
+
+  -- "exact": only the configured modifiers are down. "superset": all of them
+  -- plus at least one more (e.g. Shift added for a date hotkey) — abort, not
+  -- release. "none": anything else.
+  local function chord_state(flags)
+    local all_wanted, extra = true, false
+    for _, m in ipairs({ "cmd", "alt", "ctrl", "shift", "fn" }) do
+      local wanted = want_mods[m] or false
+      local down = flags[m] or false
+      if wanted and not down then all_wanted = false end
+      if down and not wanted then extra = true end
+    end
+    if all_wanted and not extra then return "exact" end
+    if all_wanted and extra then return "superset" end
+    return "none"
+  end
+
+  -- Armed only while the chord is held; catches a real key (e.g. the
+  -- Ctrl+Alt+Cmd+Shift+D date hotkey) that means this was a shortcut, not
+  -- dictation.
+  M._key_tap = hs.eventtap.new({ hs.eventtap.event.types.keyDown }, function()
+    if phase == "recording" then discard = true end
+    return false
+  end)
+
   M._flags_tap = hs.eventtap.new({ hs.eventtap.event.types.flagsChanged }, function(ev)
-    local match = flags_match(ev:getFlags())
-    if match and not chord_down then
+    local state = chord_state(ev:getFlags())
+    if state == "exact" and not chord_down then
       chord_down = true
+      M._key_tap:start()
       start_recording(true)
-    elseif not match and chord_down then
+    elseif state ~= "exact" and chord_down then
       chord_down = false
+      M._key_tap:stop()
+      if state == "superset" then discard = true end
       stop_recording()
     end
-    return false
-  end):start()
-  -- A real key while the chord is held (e.g. the Ctrl+Alt+Cmd+D date hotkey)
-  -- means this was a shortcut, not dictation: drop the recording.
-  M._key_tap = hs.eventtap.new({ hs.eventtap.event.types.keyDown }, function()
-    if chord_down and phase == "recording" then discard = true end
     return false
   end):start()
 end
@@ -431,6 +491,22 @@ if #startup_problems > 0 then
   alert("Dictation setup incomplete. Run setup.sh. See console.")
 else
   log.i("ready")
+end
+
+-- ~/.hammerspoon holds symlinks into the repo, and the watcher in init.lua
+-- does not see edits to symlink targets. Watch the real directory so editing
+-- the repo files reloads too.
+do
+  local src = debug.getinfo(1, "S").source:sub(2)
+  local real = hs.fs.pathToAbsolute(src)
+  local dir = real and real:match("^(.*)/")
+  if dir and dir ~= os.getenv("HOME") .. "/.hammerspoon" then
+    M._src_watcher = hs.pathwatcher.new(dir, function(files)
+      for _, f in ipairs(files) do
+        if f:sub(-4) == ".lua" then hs.reload() return end
+      end
+    end):start()
+  end
 end
 
 _G.dictate = M

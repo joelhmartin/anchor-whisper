@@ -18,6 +18,8 @@ return {
   work_dir = home .. "/.local/share/dictate/work", -- empty dir so no CLAUDE.md is picked up
 
   request_timeout_s = 10,
+  record_max_s = 120,        -- a hold longer than this is stopped automatically
+  transcribe_timeout_s = 60, -- whisper-cli is killed after this
   worker_max_requests = 20,
   worker_idle_seconds = 1800,
 
