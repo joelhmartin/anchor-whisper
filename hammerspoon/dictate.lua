@@ -220,5 +220,218 @@ M._idle_timer = idle_timer -- keep a reference so it is not collected
 
 spawn_worker()
 
+-- Menubar ---------------------------------------------------------------------
+local menubar = hs.menubar.new()
+local GLYPH = {
+  idle = "◌",
+  recording = hs.styledtext.new("●", { color = { red = 0.9, green = 0.15, blue = 0.15 } }),
+  processing = "…",
+}
+local phase = "idle"
+
+local function set_phase(p)
+  phase = p
+  if menubar then menubar:setTitle(GLYPH[p] or GLYPH.idle) end
+end
+
+local function open_console()
+  hs.openConsole()
+end
+
+if menubar then
+  menubar:setTitle(GLYPH.idle)
+  menubar:setTooltip("Dictation: hold Control+Option+Command")
+  menubar:setMenu(function()
+    return {
+      { title = "Dictation: " .. phase .. " (" .. cfg.claude_model .. ")", disabled = true },
+      { title = "-" },
+      { title = "Restart Claude worker", fn = M.restart_worker },
+      { title = "Reload Hammerspoon config", fn = hs.reload },
+      { title = "Show console", fn = open_console },
+    }
+  end)
+end
+
+local function alert(msg)
+  hs.alert.show(msg, 2)
+end
+
+local function finish()
+  set_phase("idle")
+end
+
+-- Cleanup + paste -------------------------------------------------------------
+local function deliver(text)
+  local final = core.apply_replacements(text, dictionary.replacements)
+  if final ~= "" then
+    paste.insert(final, { restore = false })
+  end
+  finish()
+end
+
+local function clean_and_paste(raw)
+  set_phase("processing")
+  M.cleanup(raw, function(ok, result)
+    if ok then
+      deliver(result)
+    else
+      log.w("cleanup failed (" .. tostring(result) .. "); pasting raw text")
+      alert("Cleanup failed, pasted raw text")
+      deliver(raw)
+    end
+  end)
+end
+
+-- Transcription ----------------------------------------------------------------
+local function transcribe(wav, on_done)
+  set_phase("processing")
+  local args = { "-m", cfg.whisper_model, "-f", wav, "-nt", "-np", "-l", "en" }
+  if WHISPER_PROMPT ~= "" then
+    args[#args + 1] = "--prompt"; args[#args + 1] = WHISPER_PROMPT
+  end
+  local t = hs.task.new(cfg.whisper_bin, function(code, stdout, stderr)
+    if code ~= 0 then
+      log.e("whisper-cli failed: " .. (stderr or ""):sub(1, 400))
+      alert("Transcription failed. See Hammerspoon console.")
+      finish()
+      return
+    end
+    on_done(core.parse_whisper(stdout))
+  end, args)
+  t:setEnvironment(child_env())
+  if not t:start() then
+    alert("Could not start whisper-cli at " .. cfg.whisper_bin)
+    finish()
+  end
+end
+
+local function run_pipeline(wav)
+  transcribe(wav, function(text)
+    os.remove(wav)
+    if text == "" then
+      log.i("nothing transcribed")
+      finish()
+      return
+    end
+    log.i("transcript: " .. #text .. " chars")
+    clean_and_paste(text)
+  end)
+end
+
+-- Recording -------------------------------------------------------------------
+local recorder = nil
+local pressed_at = nil
+local wav_path = nil
+local discard = false
+
+local function wav_has_audio(path)
+  local attrs = hs.fs.attributes(path)
+  return attrs ~= nil and attrs.size > 44
+end
+
+local function on_record_exit(code, _, stderr)
+  recorder = nil
+  local path = wav_path
+  wav_path = nil
+  if discard then
+    if path then os.remove(path) end
+    finish()
+    return
+  end
+  if not path or not wav_has_audio(path) then
+    log.e(string.format("rec produced no audio (code %s): %s", tostring(code), (stderr or ""):sub(1, 300)))
+    alert("Recording failed. Check Hammerspoon's microphone permission.")
+    if path then os.remove(path) end
+    finish()
+    return
+  end
+  run_pipeline(path)
+end
+
+local function start_recording(quiet)
+  if phase ~= "idle" then
+    if not quiet then alert("Still processing") end
+    return
+  end
+  discard = false
+  pressed_at = hs.timer.secondsSinceEpoch()
+  wav_path = hs.fs.temporaryDirectory() .. string.format("dictate-%d.wav", os.time())
+  recorder = hs.task.new(cfg.rec_bin, on_record_exit,
+    { "-q", "-c", "1", "-r", "16000", "-b", "16", wav_path })
+  recorder:setEnvironment(child_env())
+  if not recorder:start() then
+    recorder = nil
+    alert("Could not start rec at " .. cfg.rec_bin)
+    return
+  end
+  set_phase("recording")
+end
+
+local function stop_recording()
+  if phase ~= "recording" or not recorder then return end
+  local held_ms = (hs.timer.secondsSinceEpoch() - pressed_at) * 1000
+  if held_ms < cfg.min_hold_ms then discard = true end
+  recorder:interrupt() -- SIGINT lets sox finalize the WAV header
+end
+
+-- Trigger ---------------------------------------------------------------------
+local function flags_match(flags)
+  local want = {}
+  for _, m in ipairs(cfg.hotkey.mods) do want[m] = true end
+  for _, m in ipairs({ "cmd", "alt", "ctrl", "shift", "fn" }) do
+    if (flags[m] or false) ~= (want[m] or false) then return false end
+  end
+  return true
+end
+
+if cfg.hotkey.key then
+  M._hotkey = hs.hotkey.bind(cfg.hotkey.mods, cfg.hotkey.key, function() start_recording(false) end, stop_recording)
+else
+  -- Modifier-only hold: record while exactly cfg.hotkey.mods are down.
+  local chord_down = false
+  M._flags_tap = hs.eventtap.new({ hs.eventtap.event.types.flagsChanged }, function(ev)
+    local match = flags_match(ev:getFlags())
+    if match and not chord_down then
+      chord_down = true
+      start_recording(true)
+    elseif not match and chord_down then
+      chord_down = false
+      stop_recording()
+    end
+    return false
+  end):start()
+  -- A real key while the chord is held (e.g. the Ctrl+Alt+Cmd+D date hotkey)
+  -- means this was a shortcut, not dictation: drop the recording.
+  M._key_tap = hs.eventtap.new({ hs.eventtap.event.types.keyDown }, function()
+    if chord_down and phase == "recording" then discard = true end
+    return false
+  end):start()
+end
+
+-- Debug entry points for the console ------------------------------------------
+function M.debug_run(wav)
+  set_phase("processing")
+  transcribe(wav, function(text)
+    print("transcript: " .. text)
+    if text == "" then finish() return end
+    clean_and_paste(text)
+  end)
+end
+
+function M.debug_text(text)
+  clean_and_paste(text)
+end
+
+local startup_problems = {}
+for _, p in ipairs({ cfg.rec_bin, cfg.whisper_bin, cfg.claude_bin, cfg.whisper_model }) do
+  if not hs.fs.attributes(p) then startup_problems[#startup_problems + 1] = p end
+end
+if #startup_problems > 0 then
+  log.e("missing: " .. table.concat(startup_problems, ", "))
+  alert("Dictation setup incomplete. Run setup.sh. See console.")
+else
+  log.i("ready")
+end
+
 _G.dictate = M
 return M

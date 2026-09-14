@@ -38,7 +38,7 @@ done
 
 echo "== init.lua requires"
 if ! grep -q 'require("dictate")' "$HS_DIR/init.lua" 2>/dev/null; then
-  printf '\n-- Hold Ctrl+Space to dictate. See anchor-whisper repo.\nrequire("dictate")\n' >> "$HS_DIR/init.lua"
+  printf '\n-- Hold Control+Option+Command to dictate. See anchor-whisper repo.\nrequire("dictate")\n' >> "$HS_DIR/init.lua"
 fi
 
 echo "== Dictionary"
@@ -52,7 +52,7 @@ touch "$HS_DIR/init.lua"   # the pathwatcher in init.lua reloads on change
 cat <<MSG
 
 Done. Permissions Hammerspoon needs:
-  * Microphone: macOS will prompt the first time you hold Ctrl+Space.
+  * Microphone: macOS will prompt the first time you hold Control+Option+Command.
   * Accessibility: already granted if your date hotkeys paste.
 Check the Hammerspoon console for "dictate: ready".
 MSG
