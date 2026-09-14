@@ -227,6 +227,66 @@ M._idle_timer = idle_timer -- keep a reference so it is not collected
 
 spawn_worker()
 
+-- Whisper server ---------------------------------------------------------------
+-- A long-lived whisper-server keeps the model resident, avoiding the ~0.66s
+-- model load whisper-cli pays on every dictation. whisper-cli remains the
+-- automatic fallback when the server is not ready or a request fails.
+local whisper = { task = nil, ready = false, attempts = 0 }
+
+local function whisper_url(path)
+  return string.format("http://127.0.0.1:%d%s", cfg.whisper_port, path)
+end
+
+local spawn_whisper -- forward declaration
+
+local function whisper_probe(deadline)
+  -- Poll GET / every 0.5s until 200 or the deadline passes.
+  hs.http.asyncGet(whisper_url("/"), nil, function(status)
+    if whisper.ready or not whisper.task or not whisper.task:isRunning() then return end
+    if status == 200 then
+      whisper.ready = true
+      whisper.attempts = 0
+      log.i("whisper-server ready on port " .. cfg.whisper_port)
+      return
+    end
+    if hs.timer.secondsSinceEpoch() > deadline then
+      log.e("whisper-server did not become ready; falling back to whisper-cli")
+      return
+    end
+    later(0.5, function() whisper_probe(deadline) end)
+  end)
+end
+
+spawn_whisper = function()
+  if whisper.task and whisper.task:isRunning() then return end
+  whisper.ready = false
+  local args = { "-m", cfg.whisper_model, "--host", "127.0.0.1", "--port", tostring(cfg.whisper_port), "-l", "en", "-nt" }
+  whisper.task = hs.task.new(cfg.whisper_server_bin, function(code, _, stderr)
+    whisper.ready = false
+    log.w(string.format("whisper-server exited (code %s): %s", tostring(code), (stderr or ""):sub(1, 300)))
+    whisper.attempts = whisper.attempts + 1
+    if whisper.attempts <= 3 then
+      later(2, spawn_whisper)
+    else
+      log.e("whisper-server keeps dying; using whisper-cli fallback")
+    end
+  end, args)
+  whisper.task:setEnvironment(child_env())
+  if not whisper.task:start() then
+    log.e("could not start whisper-server at " .. cfg.whisper_server_bin)
+    return
+  end
+  whisper_probe(hs.timer.secondsSinceEpoch() + cfg.whisper_server_boot_s)
+end
+
+function M.restart_whisper()
+  whisper.attempts = 0
+  if whisper.task and whisper.task:isRunning() then whisper.task:terminate() end -- exit callback respawns
+  later(1, spawn_whisper)
+end
+
+spawn_whisper()
+
 -- Menubar ---------------------------------------------------------------------
 local menubar = hs.menubar.new()
 local GLYPH = {
@@ -253,6 +313,7 @@ if menubar then
       { title = "Dictation: " .. phase .. " (" .. cfg.claude_model .. ")", disabled = true },
       { title = "-" },
       { title = "Restart Claude worker", fn = M.restart_worker },
+      { title = "Restart Whisper server", fn = M.restart_whisper },
       { title = "Reload Hammerspoon config", fn = hs.reload },
       { title = "Show console", fn = open_console },
     }
@@ -293,7 +354,7 @@ local function clean_and_paste(raw)
 end
 
 -- Transcription ----------------------------------------------------------------
-local function transcribe(wav, on_done)
+local function transcribe_cli(wav, on_done)
   set_phase("processing")
   local args = { "-m", cfg.whisper_model, "-f", wav, "-nt", "-np", "-l", "en" }
   if WHISPER_PROMPT ~= "" then
@@ -310,6 +371,7 @@ local function transcribe(wav, on_done)
       on_done(nil)
       return
     end
+    log.i("transcribed via cli")
     on_done(core.parse_whisper(stdout))
   end, args)
   t:setEnvironment(child_env())
@@ -327,6 +389,43 @@ local function transcribe(wav, on_done)
     alert("Transcription timed out")
     on_done(nil)
   end)
+end
+
+-- Resident-server path: POST the WAV with curl. Falls back to whisper-cli
+-- when the server is not ready or the request fails.
+local function transcribe_server(wav, on_done)
+  local done = false
+  local args = { "-s", "-m", tostring(cfg.transcribe_timeout_s), "-X", "POST", whisper_url("/inference"),
+    "-F", "file=@" .. wav, "-F", "response_format=json", "-F", "temperature=0.0" }
+  if WHISPER_PROMPT ~= "" then
+    args[#args + 1] = "-F"; args[#args + 1] = "prompt=" .. WHISPER_PROMPT
+  end
+  local t = hs.task.new("/usr/bin/curl", function(code, stdout, stderr)
+    if done then return end
+    done = true
+    local text = (code == 0) and core.parse_server_response(stdout) or nil
+    if text == nil then
+      log.w(string.format("whisper-server request failed (code %s); falling back to whisper-cli", tostring(code)))
+      transcribe_cli(wav, on_done)
+      return
+    end
+    log.i("transcribed via server")
+    on_done(text)
+  end, args)
+  t:setEnvironment(child_env())
+  if not t:start() then
+    done = true
+    transcribe_cli(wav, on_done)
+  end
+end
+
+local function transcribe(wav, on_done)
+  set_phase("processing")
+  if whisper.ready then
+    transcribe_server(wav, on_done)
+  else
+    transcribe_cli(wav, on_done)
+  end
 end
 
 local function run_pipeline(wav)
@@ -485,8 +584,17 @@ function M.debug_text(text)
   clean_and_paste(text)
 end
 
+function M.debug_transcribe(wav, out_path)
+  transcribe(wav, function(text)
+    local f = io.open(out_path, "w")
+    f:write(tostring(text))
+    f:close()
+    finish()
+  end)
+end
+
 local startup_problems = {}
-for _, p in ipairs({ cfg.rec_bin, cfg.whisper_bin, cfg.claude_bin, cfg.whisper_model }) do
+for _, p in ipairs({ cfg.rec_bin, cfg.whisper_bin, cfg.whisper_server_bin, cfg.claude_bin, cfg.whisper_model }) do
   if not hs.fs.attributes(p) then startup_problems[#startup_problems + 1] = p end
 end
 if #startup_problems > 0 then

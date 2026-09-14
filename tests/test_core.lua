@@ -143,5 +143,15 @@ test("build_whisper_prompt fits an exact budget", function()
   eq(core.build_whisper_prompt({ "abc", "de" }, 6), "abc")
 end)
 
+test("parse_server_response extracts and cleans text", function()
+  eq(core.parse_server_response('{"text":" Hello there. \\n"}'), "Hello there.")
+end)
+
+test("parse_server_response returns nil on garbage or missing text", function()
+  eq(core.parse_server_response("not json"), nil)
+  eq(core.parse_server_response('{"error":"x"}'), nil)
+  eq(core.parse_server_response(""), nil)
+end)
+
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

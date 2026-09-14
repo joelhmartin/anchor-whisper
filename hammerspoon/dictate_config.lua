@@ -12,6 +12,9 @@ return {
   whisper_bin = "/opt/homebrew/bin/whisper-cli",
   whisper_model = home .. "/.local/share/whisper/ggml-large-v3-turbo.bin",
   whisper_prompt_max_chars = 600,
+  whisper_server_bin = "/opt/homebrew/bin/whisper-server",
+  whisper_port = 18081,            -- loopback only
+  whisper_server_boot_s = 30,      -- give up waiting for readiness after this
 
   claude_bin = home .. "/.local/bin/claude",
   claude_model = "sonnet",   -- "sonnet", "haiku", or "opus"; edit here to experiment

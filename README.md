@@ -1,6 +1,6 @@
 # anchor-whisper
 
-Hold **Control+Option+Command**, talk, release. About two seconds later the cleaned-up
+Hold **Control+Option+Command**, talk, release. About a second and a half later the cleaned-up
 text is pasted into whatever app you were in. Runs entirely on this Mac
 through Hammerspoon: local Whisper for speech-to-text, and a headless Claude
 Code worker on your Claude subscription for cleanup. No API keys, no cloud
@@ -73,3 +73,8 @@ mode with tools, MCP servers, hooks, and session persistence all disabled.
 Each dictation is one message on its stdin. The worker is recycled every 20
 requests or after 30 idle minutes, with the replacement booted first. If the
 worker fails, the raw Whisper text is pasted and an alert says so.
+
+A `whisper-server` process keeps the Whisper model loaded and answers
+transcription requests over loopback on port 18081, skipping the ~0.66s model
+load that `whisper-cli` pays on every dictation. If it is down, `whisper-cli`
+is used automatically and a console line says which path ran.

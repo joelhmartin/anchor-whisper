@@ -115,6 +115,13 @@ function core.build_system_prompt(base, dictionary)
   return table.concat(parts, "\n\n")
 end
 
+-- whisper-server /inference JSON body -> transcript text, or nil on anything unexpected.
+function core.parse_server_response(body)
+  local ev = core.decode_event(body)
+  if not ev or type(ev.text) ~= "string" then return nil end
+  return core.parse_whisper(ev.text)
+end
+
 -- Comma-separated spelling hint for whisper-cli --prompt, capped by length.
 function core.build_whisper_prompt(terms, max_chars)
   if not terms or #terms == 0 then return "" end
