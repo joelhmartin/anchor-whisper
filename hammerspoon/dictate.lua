@@ -204,7 +204,7 @@ function M.cleanup(text, cb)
   last_used = os.time()
   if not worker or not worker.ready then
     cb(false, "worker not ready")
-    if (not worker or not worker.ready) and not pending_worker then spawn_worker() end
+    if (not worker or not worker.ready) and not pending_worker then recycle_worker("stale worker") end
     return
   end
   local w = worker
@@ -348,13 +348,15 @@ local pressed_at = nil
 local wav_path = nil
 local discard = false
 local stop_recording -- forward declaration; start_recording's watchdog calls it
+local rec_seq = 0 -- bumped per recording so a stale watchdog/exit can recognize itself
 
 local function wav_has_audio(path)
   local attrs = hs.fs.attributes(path)
   return attrs ~= nil and attrs.size > 44
 end
 
-local function on_record_exit(code, _, stderr)
+local function on_record_exit(seq, code, _, stderr)
+  if seq ~= rec_seq then return end -- a zombie rec from a reset recording; ignore
   recorder = nil
   local path = wav_path
   wav_path = nil
@@ -379,9 +381,12 @@ local function start_recording(quiet)
     return
   end
   discard = false
+  rec_seq = rec_seq + 1
+  local my_seq = rec_seq
   pressed_at = hs.timer.secondsSinceEpoch()
   wav_path = hs.fs.temporaryDirectory() .. string.format("dictate-%d.wav", os.time())
-  recorder = hs.task.new(cfg.rec_bin, on_record_exit,
+  recorder = hs.task.new(cfg.rec_bin,
+    function(code, out, err) on_record_exit(my_seq, code, out, err) end,
     { "-q", "-c", "1", "-r", "16000", "-b", "16", wav_path })
   recorder:setEnvironment(child_env())
   if not recorder:start() then
@@ -391,22 +396,20 @@ local function start_recording(quiet)
   end
   set_phase("recording")
   later(cfg.record_max_s, function()
-    if phase ~= "recording" or not recorder then return end
+    if rec_seq ~= my_seq or phase ~= "recording" or not recorder then return end
     log.w("recording exceeded " .. cfg.record_max_s .. "s; stopping")
     alert("Recording stopped: too long")
     stop_recording()
     later(5, function()
-      if phase == "recording" and recorder and recorder:isRunning() then
-        recorder:terminate() -- rec ignored SIGINT
-      end
+      if rec_seq ~= my_seq or phase ~= "recording" then return end
+      if recorder and recorder:isRunning() then recorder:terminate() end -- rec ignored SIGINT
       later(5, function()
-        if phase == "recording" then -- exit callback never came; give up
-          log.e("rec did not exit; resetting")
-          recorder = nil
-          if wav_path then os.remove(wav_path) end
-          wav_path = nil
-          finish()
-        end
+        if rec_seq ~= my_seq or phase ~= "recording" then return end
+        log.e("rec did not exit; resetting")
+        recorder = nil
+        if wav_path then os.remove(wav_path) end
+        wav_path = nil
+        finish()
       end)
     end)
   end)
