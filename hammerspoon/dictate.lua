@@ -293,7 +293,7 @@ local function transcribe(wav, on_done)
     if code ~= 0 then
       log.e("whisper-cli failed: " .. (stderr or ""):sub(1, 400))
       alert("Transcription failed. See Hammerspoon console.")
-      finish()
+      on_done(nil)
       return
     end
     on_done(core.parse_whisper(stdout))
@@ -301,15 +301,15 @@ local function transcribe(wav, on_done)
   t:setEnvironment(child_env())
   if not t:start() then
     alert("Could not start whisper-cli at " .. cfg.whisper_bin)
-    finish()
+    on_done(nil)
   end
 end
 
 local function run_pipeline(wav)
   transcribe(wav, function(text)
     os.remove(wav)
-    if text == "" then
-      log.i("nothing transcribed")
+    if not text or text == "" then
+      if text == "" then log.i("nothing transcribed") end
       finish()
       return
     end
@@ -412,8 +412,8 @@ end
 function M.debug_run(wav)
   set_phase("processing")
   transcribe(wav, function(text)
-    print("transcript: " .. text)
-    if text == "" then finish() return end
+    print("transcript: " .. tostring(text))
+    if not text or text == "" then finish() return end
     clean_and_paste(text)
   end)
 end
