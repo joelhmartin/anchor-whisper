@@ -15,6 +15,7 @@ return {
   whisper_server_bin = "/opt/homebrew/bin/whisper-server",
   whisper_port = 18081,            -- loopback only
   whisper_server_boot_s = 30,      -- give up waiting for readiness after this
+  whisper_request_timeout_s = 10,  -- curl -m for a single /inference request
 
   claude_bin = home .. "/.local/bin/claude",
   claude_model = "sonnet",   -- "sonnet", "haiku", or "opus"; edit here to experiment

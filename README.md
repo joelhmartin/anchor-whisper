@@ -77,4 +77,7 @@ worker fails, the raw Whisper text is pasted and an alert says so.
 A `whisper-server` process keeps the Whisper model loaded and answers
 transcription requests over loopback on port 18081, skipping the ~0.66s model
 load that `whisper-cli` pays on every dictation. If it is down, `whisper-cli`
-is used automatically and a console line says which path ran.
+is used automatically and a console line says which path ran. A restart boots
+a replacement server on the alternate port (18081/18082) and only retires the
+old one once the replacement answers, so there is never a window with no
+server.

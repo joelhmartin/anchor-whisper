@@ -227,65 +227,83 @@ M._idle_timer = idle_timer -- keep a reference so it is not collected
 
 spawn_worker()
 
--- Whisper server ---------------------------------------------------------------
--- A long-lived whisper-server keeps the model resident, avoiding the ~0.66s
--- model load whisper-cli pays on every dictation. whisper-cli remains the
--- automatic fallback when the server is not ready or a request fails.
-local whisper = { task = nil, ready = false, attempts = 0 }
+-- Whisper server --------------------------------------------------------------
+-- A resident whisper-server keeps the model loaded. A replacement is always
+-- booted on the other of two loopback ports and adopted only once it answers,
+-- so a restart never leaves a window with no server (mirrors recycle_worker).
+local whisper = { active = nil, pending = nil, ready = false, attempts = 0 }
 
 local function whisper_url(path)
-  return string.format("http://127.0.0.1:%d%s", cfg.whisper_port, path)
+  local port = whisper.active and whisper.active.port or cfg.whisper_port
+  return string.format("http://127.0.0.1:%d%s", port, path)
 end
 
-local spawn_whisper -- forward declaration
+local function other_port()
+  if whisper.active and whisper.active.port == cfg.whisper_port then return cfg.whisper_port + 1 end
+  return cfg.whisper_port
+end
 
-local function whisper_probe(deadline)
-  -- Poll GET / every 0.5s until 200 or the deadline passes.
-  hs.http.asyncGet(whisper_url("/"), nil, function(status)
-    if whisper.ready or not whisper.task or not whisper.task:isRunning() then return end
+local start_server -- forward declaration
+
+local function adopt(entry)
+  local old = whisper.active
+  whisper.active = entry
+  whisper.ready = true
+  whisper.attempts = 0
+  log.i("whisper-server ready on port " .. entry.port)
+  if old and old ~= entry and old.task:isRunning() then old.task:terminate() end
+end
+
+local function probe(entry, deadline)
+  hs.http.asyncGet(string.format("http://127.0.0.1:%d/", entry.port), nil, function(status)
+    if not entry.task:isRunning() then return end
     if status == 200 then
-      whisper.ready = true
-      whisper.attempts = 0
-      log.i("whisper-server ready on port " .. cfg.whisper_port)
+      if whisper.pending == entry then whisper.pending = nil end
+      adopt(entry)
       return
     end
     if hs.timer.secondsSinceEpoch() > deadline then
-      log.e("whisper-server did not become ready; falling back to whisper-cli")
+      log.e("whisper-server on port " .. entry.port .. " never became ready; giving up on it")
+      if whisper.pending == entry then whisper.pending = nil end
+      entry.task:terminate()
       return
     end
-    later(0.5, function() whisper_probe(deadline) end)
+    later(0.5, function() probe(entry, deadline) end)
   end)
 end
 
-spawn_whisper = function()
-  if whisper.task and whisper.task:isRunning() then return end
-  whisper.ready = false
-  local args = { "-m", cfg.whisper_model, "--host", "127.0.0.1", "--port", tostring(cfg.whisper_port), "-l", "en", "-nt" }
-  whisper.task = hs.task.new(cfg.whisper_server_bin, function(code, _, stderr)
+start_server = function(port)
+  local entry = { port = port }
+  local args = { "-m", cfg.whisper_model, "--host", "127.0.0.1", "--port", tostring(port), "-l", "en", "-nt" }
+  entry.task = hs.task.new(cfg.whisper_server_bin, function(code, _, stderr)
+    log.w(string.format("whisper-server (port %d) exited (code %s): %s", port, tostring(code), (stderr or ""):sub(1, 300)))
+    if whisper.pending == entry then whisper.pending = nil end
+    if whisper.active ~= entry then return end -- a retired or failed-pending server
+    whisper.active = nil
     whisper.ready = false
-    log.w(string.format("whisper-server exited (code %s): %s", tostring(code), (stderr or ""):sub(1, 300)))
     whisper.attempts = whisper.attempts + 1
     if whisper.attempts <= 3 then
-      later(2, spawn_whisper)
+      later(2, function() if not whisper.pending then whisper.pending = start_server(port) end end)
     else
-      log.e("whisper-server keeps dying; using whisper-cli fallback")
+      log.e("whisper-server keeps dying; using whisper-cli until 'Restart Whisper server'")
     end
   end, args)
-  whisper.task:setEnvironment(child_env())
-  if not whisper.task:start() then
+  entry.task:setEnvironment(child_env())
+  if not entry.task:start() then
     log.e("could not start whisper-server at " .. cfg.whisper_server_bin)
-    return
+    return nil
   end
-  whisper_probe(hs.timer.secondsSinceEpoch() + cfg.whisper_server_boot_s)
+  probe(entry, hs.timer.secondsSinceEpoch() + cfg.whisper_server_boot_s)
+  return entry
 end
 
 function M.restart_whisper()
+  if whisper.pending then return end
   whisper.attempts = 0
-  if whisper.task and whisper.task:isRunning() then whisper.task:terminate() end -- exit callback respawns
-  later(1, spawn_whisper)
+  whisper.pending = start_server(other_port())
 end
 
-spawn_whisper()
+whisper.pending = start_server(cfg.whisper_port)
 
 -- Menubar ---------------------------------------------------------------------
 local menubar = hs.menubar.new()
@@ -395,10 +413,10 @@ end
 -- when the server is not ready or the request fails.
 local function transcribe_server(wav, on_done)
   local done = false
-  local args = { "-s", "-m", tostring(cfg.transcribe_timeout_s), "-X", "POST", whisper_url("/inference"),
-    "-F", "file=@" .. wav, "-F", "response_format=json", "-F", "temperature=0.0" }
+  local args = { "-s", "-m", tostring(cfg.whisper_request_timeout_s), "-X", "POST", whisper_url("/inference"),
+    "-F", "file=@" .. wav, "--form-string", "response_format=json", "--form-string", "temperature=0.0" }
   if WHISPER_PROMPT ~= "" then
-    args[#args + 1] = "-F"; args[#args + 1] = "prompt=" .. WHISPER_PROMPT
+    args[#args + 1] = "--form-string"; args[#args + 1] = "prompt=" .. WHISPER_PROMPT
   end
   local t = hs.task.new("/usr/bin/curl", function(code, stdout, stderr)
     if done then return end
@@ -406,6 +424,8 @@ local function transcribe_server(wav, on_done)
     local text = (code == 0) and core.parse_server_response(stdout) or nil
     if text == nil then
       log.w(string.format("whisper-server request failed (code %s); falling back to whisper-cli", tostring(code)))
+      whisper.ready = false
+      M.restart_whisper()
       transcribe_cli(wav, on_done)
       return
     end
