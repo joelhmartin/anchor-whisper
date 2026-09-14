@@ -3,7 +3,9 @@
 local home = os.getenv("HOME")
 
 return {
-  hotkey = { mods = { "ctrl" }, key = "space" },
+  -- Hold these modifiers (with no other key) to record. Add key = "space"
+  -- to use a normal key chord instead.
+  hotkey = { mods = { "ctrl", "alt", "cmd" } },
   min_hold_ms = 300,
 
   rec_bin = "/opt/homebrew/bin/rec",
