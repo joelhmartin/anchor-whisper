@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Hold Ctrl+Space, speak, release, and have cleaned-up text pasted into the focused app about two seconds later, using local Whisper and a warm headless Claude Code worker on the user's Max plan.
+**Goal:** Hold Control+Option+Command, speak, release, and have cleaned-up text pasted into the focused app about two seconds later, using local Whisper and a warm headless Claude Code worker on the user's Max plan.
 
 **Architecture:** A Hammerspoon module (`dictate.lua`) orchestrates three external processes: `rec` (sox) for capture, `whisper-cli` for transcription, and one long-lived `claude -p` stream-json worker for cleanup. Pure logic lives in `dictate_core.lua` and is tested with plain Lua. A shared `paste.lua` serves both dictation and the user's existing date hotkeys.
 
@@ -1459,7 +1459,7 @@ Immediately hold Control+Option+Command and dictate a sentence. Expected: either
 git add hammerspoon/dictate.lua
 git commit -m "Add recording, transcription, menubar, and hotkey to dictate.lua
 
-Hold Ctrl+Space to record via sox, transcribe with whisper-cli using the
+Hold Control+Option+Command to record via sox, transcribe with whisper-cli using the
 dictionary as a spelling hint, clean up through the warm Claude worker, and
 paste. Raw text is pasted with an alert if cleanup fails.
 
