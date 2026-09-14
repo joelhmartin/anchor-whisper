@@ -1,22 +1,12 @@
-# Dependencies
-node_modules/
+# Personal files that must never be committed (repo is public)
+hammerspoon/dictate_local.lua
+hammerspoon/dictate_dictionary.lua
 
-# Build output
-src-tauri/target/
+# Test scratch
+tests/tmp/
 
-# Environment files with secrets
-src-tauri/.env
-
-# Signing keys
-src-tauri/.tauri-private-key
-
-# Recovered/temporary files
-recovered-assets/
-
-# OS files
+# OS / editor
 .DS_Store
-
-# IDE
 .idea/
 .vscode/
 *.swp
