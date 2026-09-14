@@ -15,7 +15,7 @@
 - Single user, this Mac only. No installer, no signing, no updater, no Windows.
 - The repo is **public**. The user's dictionary and any personal overrides live in `~/.hammerspoon/` and are never committed. `.gitignore` also blocks them under `hammerspoon/` as a second guard.
 - Claude worker flags are exactly: `-p --model <model> --input-format stream-json --output-format stream-json --verbose --system-prompt <prompt> --tools "" --max-turns 1 --strict-mcp-config --mcp-config '{"mcpServers":{}}' --setting-sources "" --no-session-persistence`.
-- Hotkey is Ctrl+Space, hold to record. Minimum hold 300ms.
+- Trigger is holding Control+Option+Command with no other key (`hotkey = { mods = { "ctrl", "alt", "cmd" } }`, `key` absent). A config with `key` set uses a normal `hs.hotkey.bind` instead. Minimum hold 300ms. A real key pressed while the modifier chord is held (the user's Ctrl+Alt+Cmd+D/T date hotkeys) discards that recording.
 - Whisper model default: `ggml-large-v3-turbo.bin` (1,624,555,275 bytes) in `~/.local/share/whisper/`.
 - Default Claude model `sonnet`, set by `claude_model` in `dictate_config.lua`. `~/.hammerspoon/dictate_local.lua` may override it. No runtime UI for switching; keep it simple.
 - Never call any `mcp__claude-in-chrome__*` tool. Never dispatch Haiku subagents; Sonnet is the floor for implementers.
@@ -620,7 +620,9 @@ The `prompt` value is the `DEFAULT_PROMPT` from the deleted `src-tauri/src/lib.r
 local home = os.getenv("HOME")
 
 return {
-  hotkey = { mods = { "ctrl" }, key = "space" },
+  -- Hold these modifiers (with no other key) to record. Add key = "space"
+  -- to use a normal key chord instead.
+  hotkey = { mods = { "ctrl", "alt", "cmd" } },
   min_hold_ms = 300,
 
   rec_bin = "/opt/homebrew/bin/rec",
@@ -873,7 +875,7 @@ done
 
 echo "== init.lua requires"
 if ! grep -q 'require("dictate")' "$HS_DIR/init.lua" 2>/dev/null; then
-  printf '\n-- Hold Ctrl+Space to dictate. See anchor-whisper repo.\nrequire("dictate")\n' >> "$HS_DIR/init.lua"
+  printf '\n-- Hold Control+Option+Command to dictate. See anchor-whisper repo.\nrequire("dictate")\n' >> "$HS_DIR/init.lua"
 fi
 
 echo "== Dictionary"
@@ -887,7 +889,7 @@ touch "$HS_DIR/init.lua"   # the pathwatcher in init.lua reloads on change
 cat <<MSG
 
 Done. Permissions Hammerspoon needs:
-  * Microphone: macOS will prompt the first time you hold Ctrl+Space.
+  * Microphone: macOS will prompt the first time you hold Control+Option+Command.
   * Accessibility: already granted if your date hotkeys paste.
 Check the Hammerspoon console for "dictate: ready".
 MSG
@@ -925,10 +927,6 @@ rec -q -c 1 -r 16000 -b 16 /tmp/sigint-test.wav & sleep 2; kill -INT $!; wait $!
 soxi /tmp/sigint-test.wav
 ```
 Expected: `soxi` prints a duration near 2 seconds and 16000 Hz mono. Note the exit code; `dictate.lua` treats a WAV over 44 bytes as success regardless of exit code. If `soxi` reports an invalid header, switch `dictate.lua` (Task 8) to `terminate()` and re-test; if that also fails, record with `rec ... trim 0 60` and stop with `interrupt()`.
-
-- [ ] **Step 5: Verify Ctrl+Space is free**
-
-Open System Settings, Keyboard, Keyboard Shortcuts, Input Sources. If "Select the previous input source" is enabled with Ctrl+Space, disable it and note that in the README in Task 9.
 
 - [ ] **Step 6: Commit**
 
@@ -1207,7 +1205,7 @@ Claude-Session: https://claude.ai/code/session_012yZa2NkoBq7YWhQHF48vXT"
 
 **Interfaces:**
 - Consumes: `M.cleanup`, `M.restart_worker` from Task 7; `paste.insert` from Task 4; `core.parse_whisper`, `core.apply_replacements`.
-- Produces: `dictate.debug_run(wav_path)` and `dictate.debug_text(text)` for console testing; the Ctrl+Space hotkey; the menubar item.
+- Produces: `dictate.debug_run(wav_path)` and `dictate.debug_text(text)` for console testing; the Control+Option+Command hold trigger (modifier-only via `hs.eventtap` flagsChanged, or `hs.hotkey.bind` when `cfg.hotkey.key` is set); the menubar item.
 
 - [ ] **Step 1: Insert the pipeline, menubar, and hotkey code**
 
@@ -1234,7 +1232,7 @@ end
 
 if menubar then
   menubar:setTitle(GLYPH.idle)
-  menubar:setTooltip("Dictation: hold Ctrl+Space")
+  menubar:setTooltip("Dictation: hold Control+Option+Command")
   menubar:setMenu(function()
     return {
       { title = "Dictation: " .. phase .. " (" .. cfg.claude_model .. ")", disabled = true },
@@ -1342,9 +1340,9 @@ local function on_record_exit(code, _, stderr)
   run_pipeline(path)
 end
 
-local function start_recording()
+local function start_recording(quiet)
   if phase ~= "idle" then
-    alert("Still processing")
+    if not quiet then alert("Still processing") end
     return
   end
   discard = false
@@ -1368,7 +1366,39 @@ local function stop_recording()
   recorder:interrupt() -- SIGINT lets sox finalize the WAV header
 end
 
-hs.hotkey.bind(cfg.hotkey.mods, cfg.hotkey.key, start_recording, stop_recording)
+-- Trigger ---------------------------------------------------------------------
+local function flags_match(flags)
+  local want = {}
+  for _, m in ipairs(cfg.hotkey.mods) do want[m] = true end
+  for _, m in ipairs({ "cmd", "alt", "ctrl", "shift", "fn" }) do
+    if (flags[m] or false) ~= (want[m] or false) then return false end
+  end
+  return true
+end
+
+if cfg.hotkey.key then
+  M._hotkey = hs.hotkey.bind(cfg.hotkey.mods, cfg.hotkey.key, function() start_recording(false) end, stop_recording)
+else
+  -- Modifier-only hold: record while exactly cfg.hotkey.mods are down.
+  local chord_down = false
+  M._flags_tap = hs.eventtap.new({ hs.eventtap.event.types.flagsChanged }, function(ev)
+    local match = flags_match(ev:getFlags())
+    if match and not chord_down then
+      chord_down = true
+      start_recording(true)
+    elseif not match and chord_down then
+      chord_down = false
+      stop_recording()
+    end
+    return false
+  end):start()
+  -- A real key while the chord is held (e.g. the Ctrl+Alt+Cmd+D date hotkey)
+  -- means this was a shortcut, not dictation: drop the recording.
+  M._key_tap = hs.eventtap.new({ hs.eventtap.event.types.keyDown }, function()
+    if chord_down and phase == "recording" then discard = true end
+    return false
+  end):start()
+end
 
 -- Debug entry points for the console ------------------------------------------
 function M.debug_run(wav)
@@ -1413,7 +1443,7 @@ Expected: console prints the raw transcript, and within about two seconds TextEd
 
 - [ ] **Step 4: Live recording test**
 
-Focus TextEdit. Hold Ctrl+Space, say "um so this is a test of the dictation system, new paragraph, and it should clean things up," release. First time, approve the macOS microphone prompt for Hammerspoon and try again. Expected: glyph turns red while held, `…` after release, cleaned text pasted within about two seconds, text also on the clipboard. Tap Ctrl+Space for under 300ms: nothing happens and no alert.
+Focus TextEdit. Hold Control+Option+Command (all three, no other key), say "um so this is a test of the dictation system, new paragraph, and it should clean things up," release. First time, approve the macOS microphone prompt for Hammerspoon and try again. Expected: glyph turns red while held, `…` after release, cleaned text pasted within about two seconds, text also on the clipboard. Tap the three modifiers for under 300ms: nothing happens and no alert. Press Ctrl+Alt+Cmd+D: the date pastes as before and no dictation is triggered (the recording is discarded because a key was pressed while the chord was held).
 
 - [ ] **Step 5: Failure path test**
 
@@ -1421,7 +1451,7 @@ In the console:
 ```lua
 dictate.restart_worker()
 ```
-Immediately hold Ctrl+Space and dictate a sentence. Expected: either a normal result (new worker was ready) or the alert `Cleanup failed, pasted raw text` with the Whisper text pasted. Nothing hangs; the glyph returns to `◌`.
+Immediately hold Control+Option+Command and dictate a sentence. Expected: either a normal result (new worker was ready) or the alert `Cleanup failed, pasted raw text` with the Whisper text pasted. Nothing hangs; the glyph returns to `◌`.
 
 - [ ] **Step 6: Commit**
 
@@ -1452,7 +1482,7 @@ Claude-Session: https://claude.ai/code/session_012yZa2NkoBq7YWhQHF48vXT"
 ````markdown
 # anchor-whisper
 
-Hold **Ctrl+Space**, talk, release. About two seconds later the cleaned-up
+Hold **Control+Option+Command**, talk, release. About two seconds later the cleaned-up
 text is pasted into whatever app you were in. Runs entirely on this Mac
 through Hammerspoon: local Whisper for speech-to-text, and a headless Claude
 Code worker on your Claude subscription for cleanup. No API keys, no cloud
@@ -1469,8 +1499,12 @@ Whisper model once (1.6GB to `~/.local/share/whisper/`), symlinks the module
 into `~/.hammerspoon/`, imports your Wispr Flow dictionary, and reloads
 Hammerspoon. macOS asks for microphone access the first time you record.
 
-If Ctrl+Space switches keyboard input sources instead, turn that off in
-System Settings > Keyboard > Keyboard Shortcuts > Input Sources.
+The trigger is the three modifiers held with no other key. Pressing a letter
+while they are held (for example the Ctrl+Alt+Cmd+D date hotkey) cancels the
+recording, so those shortcuts keep working. If Wispr Flow is still running on
+Control+Option, it may start its own recording as you press the chord; change
+its shortcut or quit it. To use a normal key chord instead, add `key = "space"`
+to `hotkey` in `hammerspoon/dictate_config.lua`.
 
 ## Switching the Claude model
 
@@ -1524,7 +1558,7 @@ Expected: every section reports already-done work quickly, no downloads, and Ham
 
 - [ ] **Step 3: Acceptance run**
 
-In TextEdit, dictate 21 short sentences in a row with Ctrl+Space. Expected: each pastes within about two seconds; the console shows `recycling worker: request cap` after the 20th and `worker gen 2 ready`, with no visible pause on the 21st. Then dictate one sentence containing a dictionary term and confirm it is spelled per the dictionary.
+In TextEdit, dictate 21 short sentences in a row by holding Control+Option+Command. Expected: each pastes within about two seconds; the console shows `recycling worker: request cap` after the 20th and `worker gen 2 ready`, with no visible pause on the 21st. Then dictate one sentence containing a dictionary term and confirm it is spelled per the dictionary.
 
 - [ ] **Step 4: Run the unit tests one last time**
 
