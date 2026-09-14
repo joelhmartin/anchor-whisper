@@ -17,7 +17,7 @@
 - Claude worker flags are exactly: `-p --model <model> --input-format stream-json --output-format stream-json --verbose --system-prompt <prompt> --tools "" --max-turns 1 --strict-mcp-config --mcp-config '{"mcpServers":{}}' --setting-sources "" --no-session-persistence`.
 - Hotkey is Ctrl+Space, hold to record. Minimum hold 300ms.
 - Whisper model default: `ggml-large-v3-turbo.bin` (1,624,555,275 bytes) in `~/.local/share/whisper/`.
-- Default Claude model `sonnet`. Model must be switchable from the menubar and from `~/.hammerspoon/dictate_local.lua` without editing repo files.
+- Default Claude model `sonnet`, set by `claude_model` in `dictate_config.lua`. `~/.hammerspoon/dictate_local.lua` may override it. No runtime UI for switching; keep it simple.
 - Never call any `mcp__claude-in-chrome__*` tool. Never dispatch Haiku subagents; Sonnet is the floor for implementers.
 - Commit after every task. Work on branch `hammerspoon-rewrite`. Push with `git push origin hammerspoon-rewrite`, never bare `git push`.
 - Do not print dictionary contents into chat or commit messages. Report counts only.
@@ -608,7 +608,7 @@ Claude-Session: https://claude.ai/code/session_012yZa2NkoBq7YWhQHF48vXT"
 - Produces:
   - `require("dictate_config")` returns the defaults table with keys listed below.
   - `~/.hammerspoon/dictate_dictionary.lua` returns `{ terms = string[], replacements = {[lowercase spoken] = written} }`.
-  - Config keys: `hotkey`, `min_hold_ms`, `rec_bin`, `whisper_bin`, `whisper_model`, `whisper_prompt_max_chars`, `claude_bin`, `claude_model`, `claude_models`, `work_dir`, `request_timeout_s`, `worker_max_requests`, `worker_idle_seconds`, `prompt`.
+  - Config keys: `hotkey`, `min_hold_ms`, `rec_bin`, `whisper_bin`, `whisper_model`, `whisper_prompt_max_chars`, `claude_bin`, `claude_model`, `work_dir`, `request_timeout_s`, `worker_max_requests`, `worker_idle_seconds`, `prompt`.
 
 - [ ] **Step 1: Write `hammerspoon/dictate_config.lua`**
 
@@ -629,8 +629,7 @@ return {
   whisper_prompt_max_chars = 600,
 
   claude_bin = home .. "/.local/bin/claude",
-  claude_model = "sonnet",
-  claude_models = { "sonnet", "haiku", "opus" },   -- menubar choices
+  claude_model = "sonnet",   -- "sonnet", "haiku", or "opus"; edit here to experiment
   work_dir = home .. "/.local/share/dictate/work", -- empty dir so no CLAUDE.md is picked up
 
   request_timeout_s = 10,
@@ -953,7 +952,6 @@ Claude-Session: https://claude.ai/code/session_012yZa2NkoBq7YWhQHF48vXT"
 - Consumes: `dictate_core` (Task 3), `dictate_config` (Task 5), `json`, optional `dictate_local` and `dictate_dictionary`.
 - Produces (module table, also exported as global `dictate` for the console):
   - `dictate.cleanup(text, cb)` where `cb(ok: boolean, result: string)`.
-  - `dictate.current_model() -> string`, `dictate.set_model(name)`.
   - `dictate.restart_worker()`.
   - Internal: `worker` object `{ task, requests, ready, pending, buf }`.
 
@@ -994,12 +992,6 @@ hs.fs.mkdir(cfg.work_dir)
 
 local M = {}
 
--- Model selection: menubar choice (hs.settings) beats local override beats default.
-local SETTING_MODEL = "dictate.claude_model"
-function M.current_model()
-  return hs.settings.get(SETTING_MODEL) or cfg.claude_model
-end
-
 -- Environment for child processes. Hammerspoon's own env lacks ~/.local/bin
 -- and /opt/homebrew/bin; the Claude CLI needs HOME for ~/.claude.
 local function child_env()
@@ -1023,7 +1015,7 @@ local last_used = os.time()
 
 local function worker_args()
   return {
-    "-p", "--model", M.current_model(),
+    "-p", "--model", cfg.claude_model,
     "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
     "--system-prompt", SYSTEM_PROMPT,
     "--tools", "", "--max-turns", "1",
@@ -1117,7 +1109,7 @@ spawn_worker = function(on_ready)
     end
     w.ready = true
     respawn_attempts = 0
-    log.i(string.format("worker gen %d ready (model %s)", w.gen, M.current_model()))
+    log.i(string.format("worker gen %d ready (model %s)", w.gen, cfg.claude_model))
     if on_ready then on_ready(w) end
   end)
   return w
@@ -1136,11 +1128,6 @@ end
 
 function M.restart_worker()
   recycle_worker("manual restart")
-end
-
-function M.set_model(name)
-  hs.settings.set(SETTING_MODEL, name)
-  recycle_worker("model changed to " .. name)
 end
 
 -- Public: clean up a transcript. cb(ok, text_or_error_label).
@@ -1190,13 +1177,7 @@ dictate.cleanup("so um i need you to uh send the report to bob by friday", funct
 ```
 Expected: `true  I need you to send the report to Bob by Friday.` (wording may vary) within about 1.5 seconds.
 
-Then:
-```lua
-dictate.set_model("haiku")
-```
-Expected: log line `recycling worker: model changed to haiku` then `worker gen 2 ready (model haiku)`. Run the `cleanup` call again and confirm it still answers. Switch back with `dictate.set_model("sonnet")`.
-
-- [ ] **Step 3: Verify the timeout path**
+- [ ] **Step 3: Verify manual restart**
 
 In the console:
 ```lua
@@ -1211,7 +1192,7 @@ git add hammerspoon/dictate.lua
 git commit -m "Add dictate.lua with the warm headless Claude worker
 
 Spawns one stream-json claude -p process, warms it, recycles on request cap,
-idle, model change, or death. Model is switchable at runtime via hs.settings.
+idle, or death. Model comes from claude_model in dictate_config.lua.
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_012yZa2NkoBq7YWhQHF48vXT"
@@ -1225,7 +1206,7 @@ Claude-Session: https://claude.ai/code/session_012yZa2NkoBq7YWhQHF48vXT"
 - Modify: `hammerspoon/dictate.lua` (insert before the `_G.dictate = M` line)
 
 **Interfaces:**
-- Consumes: `M.cleanup`, `M.current_model`, `M.set_model`, `M.restart_worker` from Task 7; `paste.insert` from Task 4; `core.parse_whisper`, `core.apply_replacements`.
+- Consumes: `M.cleanup`, `M.restart_worker` from Task 7; `paste.insert` from Task 4; `core.parse_whisper`, `core.apply_replacements`.
 - Produces: `dictate.debug_run(wav_path)` and `dictate.debug_text(text)` for console testing; the Ctrl+Space hotkey; the menubar item.
 
 - [ ] **Step 1: Insert the pipeline, menubar, and hotkey code**
@@ -1255,13 +1236,8 @@ if menubar then
   menubar:setTitle(GLYPH.idle)
   menubar:setTooltip("Dictation: hold Ctrl+Space")
   menubar:setMenu(function()
-    local models = {}
-    for _, m in ipairs(cfg.claude_models) do
-      models[#models + 1] = { title = m, checked = (m == M.current_model()), fn = function() M.set_model(m) end }
-    end
     return {
-      { title = "Dictation: " .. phase, disabled = true },
-      { title = "Model", menu = models },
+      { title = "Dictation: " .. phase .. " (" .. cfg.claude_model .. ")", disabled = true },
       { title = "-" },
       { title = "Restart Claude worker", fn = M.restart_worker },
       { title = "Reload Hammerspoon config", fn = hs.reload },
@@ -1425,7 +1401,7 @@ end
 ```bash
 touch ~/.hammerspoon/init.lua
 ```
-Expected in the console: `dictate: ready` and later `worker gen 1 ready`. A new `◌` glyph appears in the menubar with a menu containing Model, Restart, Reload, Show console.
+Expected in the console: `dictate: ready` and later `worker gen 1 ready`. A new `◌` glyph appears in the menubar with a menu showing the status and model, Restart, Reload, Show console.
 
 - [ ] **Step 3: End-to-end from the fixture without recording**
 
@@ -1498,8 +1474,9 @@ System Settings > Keyboard > Keyboard Shortcuts > Input Sources.
 
 ## Switching the Claude model
 
-Click the `◌` menubar icon, then Model. The choice persists across restarts.
-For a permanent default, create `~/.hammerspoon/dictate_local.lua`:
+Edit `claude_model` in `hammerspoon/dictate_config.lua` (`sonnet`, `haiku`,
+or `opus`) and save; Hammerspoon reloads on its own. To keep a personal
+choice out of git, put it in `~/.hammerspoon/dictate_local.lua` instead:
 
 ```lua
 return { claude_model = "haiku" }
@@ -1525,7 +1502,6 @@ Open the Hammerspoon console (menubar icon > Show console). Useful calls:
 dictate.debug_text("um so send the the report to bob")   -- cleanup + paste only
 dictate.debug_run("/path/to/16k-mono.wav")                -- transcribe + cleanup + paste
 dictate.restart_worker()
-dictate.set_model("haiku")
 ```
 
 Tests for the pure logic: `tests/run.sh`.
