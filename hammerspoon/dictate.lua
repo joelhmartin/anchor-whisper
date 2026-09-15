@@ -359,7 +359,7 @@ function M.compare(text, out_path)
     pending = pending - 1
     if pending == 0 then
       local f = io.open(out_path, "w"); f:write(table.concat(rows, "\n") .. "\n"); f:close()
-      hs.alert.show("Compare written to " .. out_path)
+      log.i("compare written to " .. out_path) -- console only; never a screen alert
     end
   end
   local env = {}  -- reuse the same resolution as at load: read the .env file again
