@@ -267,5 +267,80 @@ test("resolve_cleanup resolves local_model from env, then locals, then config", 
   eq(r.local_model, "opus")
 end)
 
+-- has_speech ----------------------------------------------------------------
+
+test("has_speech is false for empty or punctuation-only transcripts", function()
+  eq(core.has_speech(""), false)
+  eq(core.has_speech("."), false)
+  eq(core.has_speech(" - "), false)
+  eq(core.has_speech("..."), false)
+  eq(core.has_speech(nil), false)
+end)
+
+test("has_speech is true once there is a word", function()
+  eq(core.has_speech("ok"), true)
+  eq(core.has_speech("Thank you."), true)
+  eq(core.has_speech("3"), true)
+  eq(core.has_speech("café"), true)
+  eq(core.has_speech("é"), true)
+end)
+
+-- empty model answers are a valid (empty) result, not an error -------------
+
+test("gemini parse treats an empty STOP candidate as an empty transcript", function()
+  local out, label = core.backends.gemini.parse('{"candidates":[{"content":{},"finishReason":"STOP","index":0}]}')
+  eq(out, ""); eq(label, nil)
+end)
+
+test("gemini parse still errors on a candidate that stopped for another reason", function()
+  local out, label = core.backends.gemini.parse('{"candidates":[{"content":{},"finishReason":"SAFETY","index":0}]}')
+  eq(out, nil); eq(label, "SAFETY")
+end)
+
+test("anthropic parse treats empty content with end_turn as an empty transcript", function()
+  local out, label = core.backends.anthropic.parse('{"content":[],"stop_reason":"end_turn"}')
+  eq(out, ""); eq(label, nil)
+end)
+
+-- cursor context --------------------------------------------------------------
+
+test("build_user_message is the bare transcript without context", function()
+  eq(core.build_user_message("hello there", nil), "hello there")
+  eq(core.build_user_message("hello there", { before = "", after = "" }), "hello there")
+end)
+
+test("build_user_message wraps transcript and context when context exists", function()
+  local m = core.build_user_message("and then we left", { before = "We had dinner", after = "" })
+  assert(m:find("Text before the cursor", 1, true), "before header")
+  assert(m:find("We had dinner", 1, true), "before text")
+  assert(m:find("Transcript", 1, true), "transcript header")
+  assert(m:find("and then we left", 1, true), "transcript text")
+  assert(not m:find("Text after the cursor", 1, true), "no after header when after is empty")
+  local m2 = core.build_user_message("x", { before = "", after = "later." })
+  assert(m2:find("Text after the cursor", 1, true), "after header")
+  assert(not m2:find("Text before the cursor", 1, true), "no before header when before is empty")
+end)
+
+test("join_at_cursor adds a space after a word or punctuation before the cursor", function()
+  eq(core.join_at_cursor({ before = "We had dinner", after = "" }, "and then left."), " and then left.")
+  eq(core.join_at_cursor({ before = "We had dinner.", after = "" }, "Then we left."), " Then we left.")
+end)
+
+test("join_at_cursor adds nothing after whitespace, a newline, an opener, or at the start", function()
+  eq(core.join_at_cursor({ before = "We had dinner ", after = "" }, "and"), "and")
+  eq(core.join_at_cursor({ before = "Notes:\n", after = "" }, "First"), "First")
+  eq(core.join_at_cursor({ before = "He said (", after = "" }, "hi"), "hi")
+  eq(core.join_at_cursor({ before = 'He said "', after = "" }, "hi"), "hi")
+  eq(core.join_at_cursor({ before = "", after = "" }, "Hello."), "Hello.")
+  eq(core.join_at_cursor(nil, "Hello."), "Hello.")
+end)
+
+test("join_at_cursor adds a trailing space when text follows the cursor immediately", function()
+  eq(core.join_at_cursor({ before = "", after = "The end." }, "Start."), "Start. ")
+  eq(core.join_at_cursor({ before = "", after = " The end." }, "Start."), "Start.")
+  eq(core.join_at_cursor({ before = "", after = ")" }, "inside"), "inside")
+  eq(core.join_at_cursor({ before = "a", after = "b" }, ""), "")
+end)
+
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

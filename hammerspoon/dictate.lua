@@ -402,6 +402,16 @@ end
 -- so a restart never leaves a window with no server (mirrors recycle_worker).
 local whisper = { active = nil, pending = nil, ready = false, attempts = 0 }
 
+-- Model/language/VAD flags shared by whisper-server and the whisper-cli
+-- fallback so both transcribe identically.
+local function whisper_model_args()
+  local args = { "-m", cfg.whisper_model, "-l", "en", "-nt" }
+  if cfg.whisper_vad_model and hs.fs.attributes(cfg.whisper_vad_model) then
+    args[#args + 1] = "--vad"; args[#args + 1] = "--vad-model"; args[#args + 1] = cfg.whisper_vad_model
+  end
+  return args
+end
+
 local function whisper_url(path)
   local port = whisper.active and whisper.active.port or cfg.whisper_port
   return string.format("http://127.0.0.1:%d%s", port, path)
@@ -455,7 +465,8 @@ end
 
 start_server = function(port)
   local entry = { port = port }
-  local args = { "-m", cfg.whisper_model, "--host", "127.0.0.1", "--port", tostring(port), "-l", "en", "-nt" }
+  local args = whisper_model_args()
+  for _, a in ipairs({ "--host", "127.0.0.1", "--port", tostring(port) }) do args[#args + 1] = a end
   entry.task = hs.task.new(cfg.whisper_server_bin, function(code, _, stderr)
     log.w(string.format("whisper-server (port %d) exited (code %s): %s", port, tostring(code), (stderr or ""):sub(1, 300)))
     local was_pending = (whisper.pending == entry)
@@ -542,7 +553,20 @@ local function alert(msg)
   hs.alert.show(msg, 2)
 end
 
+-- Cursor context for the dictation in flight: read when the chord is
+-- released (the caret is where the text will land), fed to the cleanup
+-- model, and used for the spacing of the paste. Never logged.
+local insert_ctx = nil
+
+local function capture_context()
+  insert_ctx = nil
+  if cfg.context and cfg.context.enabled then
+    insert_ctx = paste.context(cfg.context.chars)
+  end
+end
+
 local function finish()
+  insert_ctx = nil
   set_phase("idle")
 end
 
@@ -551,7 +575,7 @@ end
 -- delivery (the cleanup-API-failed-but-raw-text-still-pasted path) -- a
 -- done() right after would just overwrite the error flash a moment later.
 local function deliver(text, skip_done)
-  local final = core.apply_replacements(text, dictionary.replacements)
+  local final = core.join_at_cursor(insert_ctx, core.apply_replacements(text, dictionary.replacements))
   if final ~= "" then
     if not paste.insert(final, { restore = false }) then
       hs.pasteboard.setContents(final)
@@ -566,7 +590,7 @@ end
 
 local function clean_and_paste(raw)
   set_phase("processing")
-  M.clean(raw, function(ok, result)
+  M.clean(core.build_user_message(raw, insert_ctx), function(ok, result)
     if ok then
       deliver(result)
     else
@@ -582,7 +606,8 @@ end
 -- Transcription ----------------------------------------------------------------
 local function transcribe_cli(wav, on_done)
   set_phase("processing")
-  local args = { "-m", cfg.whisper_model, "-f", wav, "-nt", "-np", "-l", "en" }
+  local args = whisper_model_args()
+  for _, a in ipairs({ "-f", wav, "-np" }) do args[#args + 1] = a end
   if WHISPER_PROMPT ~= "" then
     args[#args + 1] = "--prompt"; args[#args + 1] = WHISPER_PROMPT
   end
@@ -666,8 +691,8 @@ end
 local function run_pipeline(wav)
   transcribe(wav, function(text)
     os.remove(wav)
-    if not text or text == "" then
-      if text == "" then log.i("nothing transcribed") end
+    if not core.has_speech(text) then
+      if text then log.i("nothing transcribed") end
       finish()
       return
     end
@@ -823,7 +848,10 @@ stop_recording = function()
   if phase ~= "recording" or not recorder then return end
   local held_ms = (hs.timer.secondsSinceEpoch() - pressed_at) * 1000
   if held_ms < cfg.min_hold_ms then discard = true end
-  if not discard then play_sound("stop") end
+  if not discard then
+    play_sound("stop")
+    capture_context()
+  end
   stop_level_meter() -- no point reading the tail once the mic has stopped
   recorder:interrupt() -- SIGINT lets sox finalize the WAV header
 end
@@ -895,7 +923,18 @@ function M.debug_run(wav)
 end
 
 function M.debug_text(text)
+  capture_context()
   clean_and_paste(text)
+end
+
+-- Cursor context of the focused field, as the pipeline would see it; the
+-- text is written to out_path (not printed) so nothing lands in the console.
+function M.debug_context(out_path)
+  local ctx = paste.context(cfg.context and cfg.context.chars)
+  local f = io.open(out_path, "w")
+  f:write(ctx and (ctx.before .. "\n---\n" .. ctx.after) or "nil")
+  f:close()
+  return ctx ~= nil
 end
 
 function M.debug_transcribe(wav, out_path)

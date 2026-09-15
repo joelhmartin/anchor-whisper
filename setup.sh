@@ -30,6 +30,16 @@ if [ ! -f "$MODEL_DIR/$MODEL" ] || [ "$(stat -f%z "$MODEL_DIR/$MODEL")" != "$EXP
   mv "$MODEL_DIR/$MODEL.part" "$MODEL_DIR/$MODEL"
 fi
 
+echo "== Silero VAD model (whisper skips silence instead of hallucinating)"
+VAD_MODEL=ggml-silero-v5.1.2.bin
+VAD_BYTES=885098
+if [ ! -f "$MODEL_DIR/$VAD_MODEL" ] || [ "$(stat -f%z "$MODEL_DIR/$VAD_MODEL")" != "$VAD_BYTES" ]; then
+  curl -L --fail --progress-bar -o "$MODEL_DIR/$VAD_MODEL.part" \
+    "https://huggingface.co/ggml-org/whisper-vad/resolve/main/$VAD_MODEL"
+  [ "$(stat -f%z "$MODEL_DIR/$VAD_MODEL.part")" = "$VAD_BYTES" ] || { echo "VAD download size mismatch" >&2; exit 1; }
+  mv "$MODEL_DIR/$VAD_MODEL.part" "$MODEL_DIR/$VAD_MODEL"
+fi
+
 echo "== Symlinks into $HS_DIR"
 mkdir -p "$HS_DIR"
 for f in paste.lua json.lua dictate_core.lua dictate_config.lua dictate_overlay.lua dictate.lua; do

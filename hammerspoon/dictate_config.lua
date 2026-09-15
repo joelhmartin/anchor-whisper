@@ -15,9 +15,21 @@ return {
   overlay = { enabled = true, width = 60, height = 26, bottom_margin = 10, bars = 12, fps = 20 },
   sounds  = { start = "Tink", stop = "Pop", error = "Basso", volume = 0.25 },
 
+  -- Cursor awareness: read up to `chars` characters on each side of the
+  -- caret in the focused field (accessibility API) and give them to the
+  -- cleanup model as context, so a dictation that continues a sentence is
+  -- cased and punctuated as a continuation. That text goes to whichever
+  -- cleanup backend is configured; set enabled = false to keep dictation
+  -- context-free.
+  context = { enabled = true, chars = 200 },
+
   rec_bin = "/opt/homebrew/bin/rec",
   whisper_bin = "/opt/homebrew/bin/whisper-cli",
   whisper_model = home .. "/.local/share/whisper/ggml-large-v3-turbo.bin",
+  -- Silero voice-activity model (setup.sh downloads it). With it, whisper
+  -- skips non-speech audio: silence comes back empty instead of as "." or a
+  -- hallucinated "Thank you." Missing file = VAD off.
+  whisper_vad_model = home .. "/.local/share/whisper/ggml-silero-v5.1.2.bin",
   whisper_prompt_max_chars = 600,
   whisper_server_bin = "/opt/homebrew/bin/whisper-server",
   whisper_port = 18081,            -- loopback only
@@ -94,6 +106,24 @@ Correct grammar, tense, and sentence structure while preserving the speaker's na
 Apply proper capitalization, punctuation, and spacing based on speech cadence and context.
 Break long run-on speech into readable sentences.
 Insert paragraph breaks when there is a clear topic shift or logical transition.
+An exclamation or interjection spoken as its own utterance ("Jesus", "God", "wow", "ugh", "damn", "oh my gosh", "okay") is its own sentence with its own terminal punctuation. Never attach it to the previous sentence with a comma, which would read as a name being addressed.
+Examples:
+- "no don't do that jesus" -> "No, don't do that. Jesus."
+- "that took forever wow" -> "That took forever. Wow."
+
+Insertion Context
+
+The input may include a "Text before the cursor" and/or "Text after the cursor" block followed by a "Transcript" block. The context blocks show what already surrounds the insertion point in the document. Use them only to decide how the transcript joins the surrounding text:
+- If the text before the cursor ends mid-sentence (no terminal punctuation), the transcript continues that sentence: start it in lowercase unless the first word is a proper noun or "I", and do not add a capital or a preceding period.
+- If the text before the cursor ends a sentence, or is empty, or ends with a line break, the transcript starts a new sentence.
+- If the text after the cursor begins mid-sentence, do not end the transcript with a period unless the speaker clearly finished the sentence. If nothing follows the cursor, end the transcript with normal terminal punctuation.
+- Match the list or paragraph style already in use.
+Examples (context -> transcript -> output):
+- before "I went to the store and" -> "bought some milk and then I came home" -> "bought some milk and then I came home."
+- before "That was Monday." -> "then we left" -> "Then we left."
+- before "Todo:\n- buy milk\n" -> "call the dentist" -> "- call the dentist"
+- before "Please send the invoice", after " and copy Sarah on it." -> "as soon as possible" -> "as soon as possible"
+Output only the transformed transcript. Never output, repeat, rewrite, or comment on the context blocks. Do not add leading or trailing spaces; spacing is handled separately.
 
 Formatting and Layout
 

@@ -18,6 +18,52 @@ local function is_word_char(c)
   return c ~= "" and c:match("[%w_']") ~= nil
 end
 
+-- Whisper answers silence with a lone "." / "-" (or, without VAD, a
+-- hallucinated pleasantry). Anything without a letter or digit is not speech
+-- and must not be sent for cleanup.
+function core.has_speech(text)
+  -- %w is ASCII-only in Lua; any non-ASCII byte (accented letters) counts too.
+  return type(text) == "string" and text:find("[%w\128-\255]") ~= nil
+end
+
+-- Cursor context: what sits immediately before/after the insertion point in
+-- the focused field (see paste.context). The model gets it so a dictation
+-- that continues a sentence is cased and punctuated as a continuation; the
+-- spacing itself is decided here, deterministically, in join_at_cursor.
+local function has_context(ctx)
+  return type(ctx) == "table" and ((ctx.before or "") ~= "" or (ctx.after or "") ~= "")
+end
+
+function core.build_user_message(transcript, ctx)
+  if not has_context(ctx) then return transcript end
+  local parts = {}
+  if (ctx.before or "") ~= "" then
+    parts[#parts + 1] = "Text before the cursor (context only, do not repeat it):\n<<<\n" .. ctx.before .. "\n>>>"
+  end
+  if (ctx.after or "") ~= "" then
+    parts[#parts + 1] = "Text after the cursor (context only, do not repeat it):\n<<<\n" .. ctx.after .. "\n>>>"
+  end
+  parts[#parts + 1] = "Transcript:\n<<<\n" .. transcript .. "\n>>>"
+  return table.concat(parts, "\n\n")
+end
+
+-- Leading/trailing space so the paste lands cleanly: a space after a word or
+-- closing punctuation before the cursor, none after whitespace, a newline, or
+-- an opening bracket/quote; a trailing space when non-space text follows.
+function core.join_at_cursor(ctx, out)
+  if out == nil or out == "" or not has_context(ctx) then return out end
+  local before, after = ctx.before or "", ctx.after or ""
+  local last = before:sub(-1)
+  if last ~= "" and not last:match("[%s%(%[{\"'`]") and not out:sub(1, 1):match("%s") then
+    out = " " .. out
+  end
+  local nxt = after:sub(1, 1)
+  if nxt ~= "" and not nxt:match("[%s%)%]}%p]") and not out:sub(-1):match("%s") then
+    out = out .. " "
+  end
+  return out
+end
+
 -- Replace each spoken phrase (table key, lowercase) with its written form,
 -- case-insensitively, matching whole phrases only. Longer keys win.
 function core.apply_replacements(text, replacements)
@@ -172,6 +218,9 @@ core.backends.anthropic = {
     for _, block in ipairs(r.content or {}) do
       if block.type == "text" and type(block.text) == "string" then return core.parse_whisper(block.text) end
     end
+    -- The prompt asks for an empty answer on silence; the API then sends no
+    -- content blocks at all. That is a result, not a failure.
+    if type(r.content) == "table" and #r.content == 0 and r.stop_reason == "end_turn" then return "" end
     return nil, "no text block"
   end,
 }
@@ -214,7 +263,12 @@ core.backends.gemini = {
     if r.error then return nil, tostring(r.error.message or "error") end
     local cand = r.candidates and r.candidates[1]
     local parts = cand and cand.content and cand.content.parts
-    if type(parts) ~= "table" then return nil, "no parts" end
+    if type(parts) ~= "table" then
+      -- An empty answer arrives as {"content":{},"finishReason":"STOP"}:
+      -- the prompt's required response to silence, so a valid empty result.
+      if cand and cand.finishReason == "STOP" then return "" end
+      return nil, (cand and cand.finishReason) or "no parts"
+    end
     local out = {}
     for _, p in ipairs(parts) do if type(p.text) == "string" then out[#out + 1] = p.text end end
     if #out == 0 then return nil, "no text" end

@@ -144,6 +144,7 @@ Open the Hammerspoon console (menubar icon > Show console). Useful calls:
 dictate.debug_text("um so send the the report to bob")   -- cleanup + paste only
 dictate.debug_run("/path/to/16k-mono.wav")                -- transcribe + cleanup + paste
 dictate.restart_worker()
+dictate.debug_context("/tmp/ctx.txt")                     -- what the focused field exposes around the caret
 ```
 
 A stuck recording is stopped automatically after two minutes, and a stuck
@@ -158,6 +159,22 @@ mode with tools, MCP servers, hooks, and session persistence all disabled.
 Each dictation is one message on its stdin. The worker is recycled every 20
 requests or after 30 idle minutes, with the replacement booted first. If the
 worker fails, the raw Whisper text is pasted and an alert says so.
+
+Whisper runs with Silero voice-activity detection (`setup.sh` downloads the
+small VAD model next to the Whisper model). Non-speech audio is skipped, so
+a hold with nothing said comes back empty in a few milliseconds instead of
+as a hallucinated "Thank you." Transcripts with no letters or digits never
+reach the cleanup model, and an empty answer from the cleanup model counts
+as "nothing to paste" rather than as a failure.
+
+Before the transcript goes to cleanup, the text around the caret in the
+focused field (up to 200 characters each side, read through the
+accessibility API) is attached as context so a dictation that continues a
+sentence is cased and punctuated as a continuation. The leading/trailing
+space is decided in code, not by the model. Fields that do not expose their
+text (some web and Electron views) simply get no context. That context goes
+to the configured cleanup backend; set `context = { enabled = false }` in
+`dictate_local.lua` to turn it off.
 
 A `whisper-server` process keeps the Whisper model loaded and answers
 transcription requests over loopback on port 18081, skipping the ~0.66s model
