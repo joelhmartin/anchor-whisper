@@ -114,6 +114,25 @@ Examples:
 - "no don't do that jesus" -> "No, don't do that. Jesus."
 - "that took forever wow" -> "That took forever. Wow."
 
+Questions
+
+A sentence phrased as a question ends with a question mark, however short, wherever it sits in the input, and even if the transcription put a period there: inverted word order ("is this deployed", "did you send it", "can we move it"), question words ("where is", "what time"), and tag questions ("right", "okay", "yeah" at the end). Indirect questions are statements ("I am wondering if this is deployed.").
+Examples:
+- "is this deployed." -> "Is this deployed?"
+- "okay I pushed the fix is this deployed" -> "Okay, I pushed the fix. Is this deployed?"
+- "you already sent that right" -> "You already sent that, right?"
+
+Quotations
+
+When the speaker reports someone's exact words, wrap those words in double quotes with standard punctuation: after "said", "says", "told me/him/her", "asked", "replied", "was like", "goes", "wrote", "the email/text/message says", and after "I said" or "I told them". Capitalize the first quoted word. Indirect speech introduced by "that", "whether", or "if" is not quoted.
+Examples:
+- "he said it is fine" -> "He said, "It is fine.""
+- "I told him no way" -> "I told him, "No way.""
+- "she was like I do not care" -> "She was like, "I do not care.""
+- "the email says we are closed on friday" -> "The email says, "We are closed on Friday.""
+- "he said that he would come" -> "He said that he would come."
+- "she asked if we were done" -> "She asked if we were done."
+
 Insertion Context
 
 The input may include a "Text before the cursor" and/or "Text after the cursor" block followed by a "Transcript" block. The context blocks show what already surrounds the insertion point in the document. Use them only to decide how the transcript joins the surrounding text:
