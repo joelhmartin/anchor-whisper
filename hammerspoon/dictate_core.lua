@@ -171,7 +171,7 @@ function core.build_system_prompt(base, dictionary)
   local parts = { base }
   if #terms > 0 then
     local lines = { "Vocabulary", "",
-      "The speaker regularly uses the names and terms below. When a transcribed word or phrase is a close phonetic match for one of them, output the spelling shown here instead of what was transcribed." }
+      "The speaker regularly uses the names and terms below. When a transcribed word or phrase sounds like one of them, output the spelling shown here instead of what was transcribed. Apply this only when the whole term matches what was said: never swap in a term that has different or extra syllables (a two-word phrase is not a one-word term with a file extension), and never replace a phrase that is already a correct, plausible phrase on its own. When unsure, keep the transcript's words." }
     for _, t in ipairs(terms) do lines[#lines + 1] = "- " .. t end
     parts[#parts + 1] = table.concat(lines, "\n")
   end
