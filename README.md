@@ -29,19 +29,54 @@ The module lives in this repo on the external drive and is symlinked into
 Hammerspoon logs a `require` error for `dictate`, but the other hotkeys keep
 working.
 
-## Switching the Claude model
+## Choosing the cleanup backend
 
-Edit `claude_model` in `hammerspoon/dictate_config.lua` (`sonnet`, `haiku`,
-or `opus`) and save; Hammerspoon reloads on its own. To keep a personal
-choice out of git, put it in `~/.hammerspoon/dictate_local.lua` instead:
+The transcript-cleanup step is a config choice among four backends:
+
+| Backend    | What it calls                          | Key needed        |
+|------------|-----------------------------------------|--------------------|
+| `local`    | The headless Claude Code CLI worker, on your Claude subscription | none |
+| `anthropic`| Anthropic Messages API                  | `ANTHROPIC_API_KEY`|
+| `openai`   | OpenAI Chat Completions API             | `OPENAI_API_KEY`   |
+| `gemini`   | Gemini `generateContent` API            | `GEMINI_API_KEY`   |
+
+`local` is the default and also the automatic fallback: if an API backend
+fails or times out, that dictation falls back to the local worker (set
+`cleanup.local_fallback = false` to disable this). The local worker's model
+is still controlled by `claude_model`, separate from `cleanup.model`.
+
+Defaults, from `hammerspoon/dictate_config.lua`:
 
 ```lua
-return { claude_model = "haiku" }
+cleanup = { backend = "local", model = nil, timeout_s = 10, local_fallback = true },
+cleanup_models = {
+  anthropic = "claude-haiku-4-5",
+  openai = "gpt-5-nano",
+  gemini = "gemini-2.5-flash-lite",
+},
 ```
 
-Latency is dominated by process startup, not the model, so Sonnet and Haiku
-feel about the same. See `hammerspoon/dictate_local.example.lua` for other
-overrides.
+Keys and backend choice never go in the repo or the shell environment.
+Set them in one of, highest priority first:
+
+1. `~/.config/dictate/env` (created by `setup.sh` from `scripts/env.example`,
+   `chmod 600`) — `KEY=VALUE` lines: `DICTATE_BACKEND`, `DICTATE_MODEL`,
+   `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`.
+2. `~/.hammerspoon/dictate_local.lua` — any `dictate_config.lua` key,
+   plus `anthropic_api_key` / `openai_api_key` / `gemini_api_key` and a
+   `cleanup = { backend = "...", model = "..." }` table. See
+   `hammerspoon/dictate_local.example.lua`.
+3. `dictate_config.lua` defaults above.
+
+To compare backends side by side on the same transcript, from the
+Hammerspoon console:
+
+```lua
+dictate.compare("some dictated text")
+```
+
+This races every backend with a configured key (plus `local`) and writes
+timings and outputs to `/tmp/dictate-compare.txt`.
 
 ## Dictionary
 

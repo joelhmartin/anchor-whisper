@@ -153,5 +153,82 @@ test("parse_server_response returns nil on garbage or missing text", function()
   eq(core.parse_server_response(""), nil)
 end)
 
+-- env file / backend adapters / resolve_cleanup ----------------------------
+
+test("parse_env_file handles comments, blanks, quotes, spaces", function()
+  local t = core.parse_env_file("# c\n\nDICTATE_BACKEND = gemini\nGEMINI_API_KEY=\"abc=123\"\nOPENAI_API_KEY='x'\nbad line\n")
+  eq(t.DICTATE_BACKEND, "gemini"); eq(t.GEMINI_API_KEY, "abc=123"); eq(t.OPENAI_API_KEY, "x"); eq(t.bad, nil)
+end)
+
+test("parse_env_file returns empty table for nil or empty", function()
+  eq(next(core.parse_env_file(nil)), nil); eq(next(core.parse_env_file("")), nil)
+end)
+
+test("anthropic build shapes the Messages request", function()
+  local r = core.backends.anthropic.build("claude-haiku-4-5", "K", "SYS", "hi")
+  eq(r.url, "https://api.anthropic.com/v1/messages"); eq(r.headers["x-api-key"], "K")
+  eq(r.body.model, "claude-haiku-4-5"); eq(r.body.system[1].text, "SYS"); eq(r.body.messages[1].content, "hi")
+  eq(r.body.system[1].cache_control.type, "ephemeral")
+end)
+
+test("anthropic parse extracts the text block", function()
+  eq(core.backends.anthropic.parse('{"content":[{"type":"text","text":" Clean. "}],"stop_reason":"end_turn"}'), "Clean.")
+end)
+
+test("anthropic parse reports errors and refusals", function()
+  local t, e = core.backends.anthropic.parse('{"error":{"type":"authentication_error","message":"bad key"}}')
+  eq(t, nil); eq(e, "bad key")
+  t, e = core.backends.anthropic.parse('{"content":[],"stop_reason":"refusal"}')
+  eq(t, nil); eq(e, "refusal")
+  eq((core.backends.anthropic.parse("nope")), nil)
+end)
+
+test("openai build shapes the chat request without temperature", function()
+  local r = core.backends.openai.build("gpt-5-nano", "K", "SYS", "hi")
+  eq(r.url, "https://api.openai.com/v1/chat/completions"); eq(r.headers["Authorization"], "Bearer K")
+  eq(r.body.messages[1].role, "system"); eq(r.body.messages[2].content, "hi"); eq(r.body.temperature, nil)
+end)
+
+test("openai parse extracts choices[1].message.content", function()
+  eq(core.backends.openai.parse('{"choices":[{"message":{"role":"assistant","content":"Clean."}}]}'), "Clean.")
+  local t, e = core.backends.openai.parse('{"error":{"message":"quota"}}'); eq(t, nil); eq(e, "quota")
+  eq((core.backends.openai.parse('{"choices":[]}')), nil)
+end)
+
+test("gemini build shapes generateContent with the model in the URL", function()
+  local r = core.backends.gemini.build("gemini-2.5-flash-lite", "K", "SYS", "hi")
+  eq(r.url, "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent")
+  eq(r.headers["x-goog-api-key"], "K"); eq(r.body.system_instruction.parts[1].text, "SYS")
+  eq(r.body.contents[1].parts[1].text, "hi"); eq(r.body.generationConfig.temperature, 0)
+end)
+
+test("gemini parse concatenates candidate parts", function()
+  eq(core.backends.gemini.parse('{"candidates":[{"content":{"parts":[{"text":"Cle"},{"text":"an."}]}}]}'), "Clean.")
+  local t, e = core.backends.gemini.parse('{"error":{"message":"denied"}}'); eq(t, nil); eq(e, "denied")
+  eq((core.backends.gemini.parse('{"candidates":[]}')), nil)
+end)
+
+test("every backend exposes build and parse", function()
+  for _, name in ipairs({ "anthropic", "openai", "gemini" }) do
+    assert(type(core.backends[name].build) == "function", name .. " build")
+    assert(type(core.backends[name].parse) == "function", name .. " parse")
+  end
+end)
+
+test("resolve_cleanup picks env file over local over defaults", function()
+  local cfg = { cleanup = { backend = "local", model = nil }, cleanup_models = { gemini = "g-default" } }
+  local r = core.resolve_cleanup(cfg, { DICTATE_BACKEND = "gemini", GEMINI_API_KEY = "envkey" }, {})
+  eq(r.backend, "gemini"); eq(r.model, "g-default"); eq(r.key, "envkey")
+  r = core.resolve_cleanup(cfg, {}, { gemini_api_key = "localkey" })
+  eq(r.backend, "local"); eq(r.key, nil)
+  r = core.resolve_cleanup({ cleanup = { backend = "openai", model = "m" }, cleanup_models = {} }, { DICTATE_MODEL = "m2" }, { openai_api_key = "lk" })
+  eq(r.backend, "openai"); eq(r.model, "m2"); eq(r.key, "lk")
+end)
+
+test("resolve_cleanup falls back to local when the key is missing", function()
+  local r = core.resolve_cleanup({ cleanup = { backend = "openai" }, cleanup_models = { openai = "x" } }, {}, {})
+  eq(r.backend, "local"); eq(r.reason, "no key for openai")
+end)
+
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

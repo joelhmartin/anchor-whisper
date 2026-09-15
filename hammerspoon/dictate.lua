@@ -9,11 +9,32 @@ local log = hs.logger.new("dictate", "info")
 
 -- Config ---------------------------------------------------------------------
 local cfg = require("dictate_config")
+local overrides = {} -- the dictate_local table, kept for M.compare's re-resolution
 do
-  local ok, overrides = pcall(require, "dictate_local")
-  if ok and type(overrides) == "table" then
+  local ok, o = pcall(require, "dictate_local")
+  if ok and type(o) == "table" then
+    overrides = o
     for k, v in pairs(overrides) do cfg[k] = v end
   end
+end
+
+-- Cleanup backend resolution: env file > dictate_local > dictate_config.
+local CLEANUP
+do
+  local env = {}
+  local fh = io.open(cfg.env_file)
+  if fh then
+    env = core.parse_env_file(fh:read("a"))
+    fh:close()
+  end
+  CLEANUP = core.resolve_cleanup(cfg, env, overrides, os.getenv)
+  if CLEANUP.reason then log.w("cleanup backend: " .. CLEANUP.reason .. "; using local") end
+end
+
+-- Shared label for the menubar and the startup log.
+local function cleanup_label()
+  if CLEANUP.backend == "local" then return "local/" .. cfg.claude_model end
+  return CLEANUP.backend .. "/" .. CLEANUP.model
 end
 
 local dictionary = { terms = {}, replacements = {} }
@@ -225,7 +246,82 @@ local idle_timer = hs.timer.doEvery(60, function()
 end)
 M._idle_timer = idle_timer -- keep a reference so it is not collected
 
-spawn_worker()
+-- The local worker is the default backend and the automatic fallback for the
+-- others, so it spawns whenever either applies.
+if CLEANUP.backend == "local" or cfg.cleanup.local_fallback then
+  spawn_worker()
+end
+
+-- API cleanup -----------------------------------------------------------------
+local json = require("json")
+
+-- One transport for every provider adapter. cb(ok, text_or_label).
+local function cleanup_api(backend_name, model, key, text, cb)
+  local adapter = core.backends[backend_name]
+  local req = adapter.build(model, key, SYSTEM_PROMPT, text)
+  local done = false
+  local started = hs.timer.secondsSinceEpoch()
+  later(cfg.cleanup.timeout_s, function()
+    if done then return end
+    done = true
+    cb(false, "timeout")
+  end)
+  hs.http.asyncPost(req.url, json.encode(req.body), req.headers, function(status, body, _)
+    if done then return end
+    done = true
+    if status ~= 200 then
+      log.w(string.format("%s HTTP %s: %s", backend_name, tostring(status), (body or ""):sub(1, 200)))
+      cb(false, "http " .. tostring(status))
+      return
+    end
+    local out, label = adapter.parse(body)
+    if not out then cb(false, label or "parse") return end
+    log.i(string.format("cleanup via %s/%s in %.2fs", backend_name, model, hs.timer.secondsSinceEpoch() - started))
+    cb(true, out)
+  end)
+end
+
+-- Public: clean up a transcript with the configured backend. cb(ok, text_or_label).
+function M.clean(text, cb)
+  if CLEANUP.backend == "local" then return M.cleanup(text, cb) end
+  cleanup_api(CLEANUP.backend, CLEANUP.model, CLEANUP.key, text, function(ok, out)
+    if ok then return cb(true, out) end
+    log.w(CLEANUP.backend .. " cleanup failed (" .. tostring(out) .. ")")
+    if cfg.cleanup.local_fallback then
+      log.i("falling back to local worker")
+      return M.cleanup(text, cb)
+    end
+    cb(false, out)
+  end)
+end
+
+-- Run one transcript through every backend that has a key, plus local, and
+-- write timings and outputs to out_path (default /tmp/dictate-compare.txt).
+function M.compare(text, out_path)
+  out_path = out_path or "/tmp/dictate-compare.txt"
+  local rows, pending = {}, 0
+  local function finish_one(name, model, t0, ok, out)
+    rows[#rows + 1] = string.format("%-10s %-24s %6.2fs  %s  %s", name, model or "-", hs.timer.secondsSinceEpoch() - t0, ok and "ok " or "ERR", tostring(out))
+    pending = pending - 1
+    if pending == 0 then
+      local f = io.open(out_path, "w"); f:write(table.concat(rows, "\n") .. "\n"); f:close()
+      hs.alert.show("Compare written to " .. out_path)
+    end
+  end
+  local env = {}  -- reuse the same resolution as at load: read the env file again
+  local fh = io.open(cfg.env_file); if fh then env = core.parse_env_file(fh:read("a")); fh:close() end
+  local jobs = { { "local", nil, nil } }
+  for _, name in ipairs({ "anthropic", "openai", "gemini" }) do
+    local r = core.resolve_cleanup({ cleanup = { backend = name }, cleanup_models = cfg.cleanup_models }, env, overrides, os.getenv)
+    if r.backend == name then jobs[#jobs + 1] = { name, r.model, r.key } end
+  end
+  pending = #jobs
+  for _, j in ipairs(jobs) do
+    local t0 = hs.timer.secondsSinceEpoch()
+    if j[1] == "local" then M.cleanup(text, function(ok, out) finish_one("local", cfg.claude_model, t0, ok, out) end)
+    else cleanup_api(j[1], j[2], j[3], text, function(ok, out) finish_one(j[1], j[2], t0, ok, out) end) end
+  end
+end
 
 -- Whisper server --------------------------------------------------------------
 -- A resident whisper-server keeps the model loaded. A replacement is always
@@ -351,7 +447,7 @@ if menubar then
   menubar:setTooltip("Dictation: hold Control+Option+Command")
   menubar:setMenu(function()
     return {
-      { title = "Dictation: " .. phase .. " (" .. cfg.claude_model .. ")", disabled = true },
+      { title = "Dictation: " .. phase .. " (" .. cleanup_label() .. ")", disabled = true },
       { title = "-" },
       { title = "Restart Claude worker", fn = M.restart_worker },
       { title = "Restart Whisper server", fn = M.restart_whisper },
@@ -383,7 +479,7 @@ end
 
 local function clean_and_paste(raw)
   set_phase("processing")
-  M.cleanup(raw, function(ok, result)
+  M.clean(raw, function(ok, result)
     if ok then
       deliver(result)
     else
@@ -649,6 +745,7 @@ if #startup_problems > 0 then
 else
   log.i("ready")
 end
+log.i("cleanup backend: " .. cleanup_label())
 
 -- ~/.hammerspoon holds symlinks into the repo, and the watcher in init.lua
 -- does not see edits to symlink targets. Watch the real directory so editing

@@ -46,6 +46,13 @@ if [ ! -f "$HS_DIR/dictate_dictionary.lua" ]; then
   "$REPO/scripts/import-wispr-dictionary.sh" || echo "No dictionary imported (Wispr Flow not found). Continuing without one."
 fi
 
+echo "== Cleanup backend env"
+mkdir -p "$HOME/.config/dictate"
+if [ ! -f "$HOME/.config/dictate/env" ]; then
+  cp "$REPO/scripts/env.example" "$HOME/.config/dictate/env"
+  chmod 600 "$HOME/.config/dictate/env"
+fi
+
 echo "== Reload Hammerspoon"
 touch "$HS_DIR/init.lua"   # the pathwatcher in init.lua reloads on change
 

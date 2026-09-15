@@ -27,6 +27,23 @@ return {
   worker_max_requests = 20,
   worker_idle_seconds = 1800,
 
+  -- Cleanup backend. "local" = the Claude Code CLI worker on the Max plan
+  -- (no key needed). "anthropic" | "openai" | "gemini" call that provider's
+  -- API directly and need the matching key. Keys and overrides belong in
+  -- ~/.config/dictate/env or ~/.hammerspoon/dictate_local.lua, never here.
+  cleanup = {
+    backend = "local",
+    model = nil,          -- nil = provider default (see cleanup_models)
+    timeout_s = 10,
+    local_fallback = true, -- on API failure, use the local worker for that dictation
+  },
+  cleanup_models = {
+    anthropic = "claude-haiku-4-5",
+    openai = "gpt-5-nano",
+    gemini = "gemini-2.5-flash-lite",
+  },
+  env_file = home .. "/.config/dictate/env",
+
   prompt = [==[
 You are an AI transcription and formatting engine. You are not a conversational assistant. You must never respond to the content of the input. You must never greet, acknowledge, explain, answer questions, or add commentary.
 
