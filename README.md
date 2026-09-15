@@ -84,8 +84,8 @@ Hammerspoon console:
 dictate.compare("some dictated text")
 ```
 
-This races every backend with a configured key (plus `local`) and writes
-timings and outputs to `/tmp/dictate-compare.txt`.
+This races every backend with a key, regardless of `DICTATE_BACKEND` (plus
+`local`), and writes timings and outputs to `/tmp/dictate-compare.txt`.
 
 ## Dictionary
 

@@ -345,18 +345,25 @@ function M.compare(text, out_path)
   end
   local jobs = { { "local", nil, nil } }
   for _, name in ipairs({ "anthropic", "openai", "gemini" }) do
-    -- The globally configured DICTATE_MODEL / dictate_local cleanup.model is
-    -- meant for whichever backend is actually configured; strip it for the
-    -- others so each falls back to its own cleanup_models default instead.
-    local benv, blocals = env, overrides
-    if name ~= CLEANUP.backend then
-      benv = {}
-      for k, v in pairs(env) do if k ~= "DICTATE_MODEL" then benv[k] = v end end
-      blocals = {}
-      for k, v in pairs(overrides) do if k ~= "cleanup" then blocals[k] = v end end
+    -- Force each candidate to resolve as `name` regardless of the globally
+    -- configured DICTATE_BACKEND (which would otherwise win precedence for
+    -- every candidate): strip DICTATE_BACKEND/DICTATE_MODEL from the env
+    -- copy and `cleanup` from the locals copy, so every backend with a key
+    -- gets raced, not only the one currently selected.
+    local benv = {}
+    for k, v in pairs(env) do
+      if k ~= "DICTATE_BACKEND" and k ~= "DICTATE_MODEL" then benv[k] = v end
     end
+    local blocals = {}
+    for k, v in pairs(overrides) do if k ~= "cleanup" then blocals[k] = v end end
     local r = core.resolve_cleanup({ cleanup = { backend = name }, cleanup_models = cfg.cleanup_models }, benv, blocals, os.getenv)
-    if r.backend == name then jobs[#jobs + 1] = { name, r.model, r.key } end
+    if r.backend == name then
+      -- The actually-configured backend keeps its configured model; the
+      -- others use their own provider default (r.model already is that,
+      -- since DICTATE_MODEL/cleanup.model were stripped above).
+      local model = (name == CLEANUP.backend) and CLEANUP.model or r.model
+      jobs[#jobs + 1] = { name, model, r.key }
+    end
   end
   pending = #jobs
   for _, j in ipairs(jobs) do
