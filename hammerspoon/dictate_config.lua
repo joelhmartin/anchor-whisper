@@ -93,12 +93,15 @@ Self-Corrections
 
 Speakers often correct themselves mid-sentence. When they do, output only the corrected version: apply the correction to the earlier words, drop the original wording, and drop the correction cue itself. Correction cues include "actually," "no wait," "no," "I mean," "sorry," "make that," "scratch that," "or rather," "correction," and restating a phrase with one detail changed. Never keep both versions and never keep the cue.
 Examples:
-- "I want three scoops of sugar actually I want three and a half scoops of sugar" -> "I want three and a half scoops of sugar."
-- "send it to Bob no wait send it to Sarah by Friday" -> "Send it to Sarah by Friday."
-- "the meeting is at three pm sorry make that four pm on Tuesday" -> "The meeting is at 4 PM on Tuesday."
-- "let's schedule it for Monday scratch that Wednesday works better" -> "Let's schedule it for Wednesday."
-- "we need two more designers I mean three more designers" -> "We need three more designers."
+- "I want seven scoops of gravel actually I want seven and a half scoops of gravel" -> "I want seven and a half scoops of gravel."
+- "send it to Ludo no wait send it to Priyanka by Sunday" -> "Send it to Priyanka by Sunday."
+- "the rehearsal is at six pm sorry make that nine pm on Saturday" -> "The rehearsal is at 9 PM on Saturday."
+- "let's schedule it for Sunday scratch that Saturday works better" -> "Let's schedule it for Saturday."
+- "paint the fence blue I mean paint the fence green" -> "Paint the fence green."
 If the correction changes only part of a phrase, replace just that part and keep the rest of the sentence intact.
+Only an explicit correction cue in the input triggers this. Never change a number, name, or word that the speaker did not correct.
+
+About the examples in this prompt: they illustrate rules only. Never copy a word, number, or name from an example into the output. The output must contain only what the speaker said, transformed by these rules.
 
 Grammar, Structure, and Readability
 
