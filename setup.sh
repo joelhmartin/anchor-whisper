@@ -48,12 +48,13 @@ done
 
 echo "== init.lua requires"
 if ! grep -q 'require("dictate")' "$HS_DIR/init.lua" 2>/dev/null; then
-  printf '\n-- Hold Control+Option+Command to dictate. See anchor-whisper repo.\nrequire("dictate")\n' >> "$HS_DIR/init.lua"
+  printf '\n-- Hold Control+Option to dictate. See anchor-whisper repo.\nrequire("dictate")\n' >> "$HS_DIR/init.lua"
 fi
 
 echo "== Dictionary"
 if [ ! -f "$HS_DIR/dictate_dictionary.lua" ]; then
-  "$REPO/scripts/import-wispr-dictionary.sh" || echo "No dictionary imported (Wispr Flow not found). Continuing without one."
+  cp "$REPO/hammerspoon/dictate_dictionary.example.lua" "$HS_DIR/dictate_dictionary.lua"
+  echo "Created $HS_DIR/dictate_dictionary.lua from the example; edit it with your own terms."
 fi
 
 echo "== Cleanup backend .env"
@@ -68,7 +69,7 @@ touch "$HS_DIR/init.lua"   # the pathwatcher in init.lua reloads on change
 cat <<MSG
 
 Done. Permissions Hammerspoon needs:
-  * Microphone: macOS will prompt the first time you hold Control+Option+Command.
+  * Microphone: macOS will prompt the first time you hold Control+Option.
   * Accessibility: already granted if your date hotkeys paste.
 Check the Hammerspoon console for "dictate: ready".
 MSG

@@ -564,6 +564,14 @@ local function capture_context()
   insert_ctx = nil
   if cfg.context and cfg.context.enabled then
     insert_ctx = paste.context(cfg.context.chars)
+    -- Sizes only, never the text: enough to see which apps expose a caret.
+    local app = hs.application.frontmostApplication()
+    local name = app and app:name() or "?"
+    if insert_ctx then
+      log.i(string.format("context from %s: %d chars before, %d after", name, #insert_ctx.before, #insert_ctx.after))
+    else
+      log.i("context: none exposed by " .. name)
+    end
   end
 end
 

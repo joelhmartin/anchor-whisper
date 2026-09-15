@@ -5,7 +5,7 @@ local home = os.getenv("HOME")
 return {
   -- Hold these modifiers (with no other key) to record. Add key = "space"
   -- to use a normal key chord instead.
-  hotkey = { mods = { "ctrl", "alt", "cmd" } },
+  hotkey = { mods = { "ctrl", "alt" } },
   min_hold_ms = 300,
 
   -- Wispr Flow-style floating pill (hammerspoon/dictate_overlay.lua) and the
