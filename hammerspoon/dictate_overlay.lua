@@ -121,11 +121,15 @@ local function redraw(heights, color)
   c:replaceElements(els)
 end
 
--- Hides the pill. A no-op while a done()/error() flash is in progress (that
--- flash's own timer is responsible for hiding); otherwise idempotent: safe
+-- Hides the pill. No-op while a done()/error() flash is in progress (that
+-- flash's own timer is responsible for hiding), except that it cancels any
+-- deferred processing() (see M.processing()) -- the most recent intent
+-- wins, so a hide() that arrives during a flash must not have a stale
+-- processing() take over once the flash ends. Otherwise idempotent: safe
 -- to call on an already-hidden or never-shown canvas.
 function M.hide()
   if not cfg.enabled then return end
+  pendingState = nil
   if flashing then return end
   state = nil
   stop_anim()
