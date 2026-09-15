@@ -408,6 +408,8 @@ local function whisper_model_args()
   local args = { "-m", cfg.whisper_model, "-l", "en", "-nt" }
   if cfg.whisper_vad_model and hs.fs.attributes(cfg.whisper_vad_model) then
     args[#args + 1] = "--vad"; args[#args + 1] = "--vad-model"; args[#args + 1] = cfg.whisper_vad_model
+  else
+    log.w("VAD model missing (" .. tostring(cfg.whisper_vad_model) .. "); silence may transcribe as text. Run setup.sh")
   end
   return args
 end
@@ -575,6 +577,12 @@ end
 -- delivery (the cleanup-API-failed-but-raw-text-still-pasted path) -- a
 -- done() right after would just overwrite the error flash a moment later.
 local function deliver(text, skip_done)
+  -- Context was read at chord release; if the user has since switched apps
+  -- the paste lands somewhere else, so the spacing derived from it is wrong.
+  if insert_ctx and insert_ctx.pid then
+    local front = hs.application.frontmostApplication()
+    if front and front:pid() ~= insert_ctx.pid then insert_ctx = nil end
+  end
   local final = core.join_at_cursor(insert_ctx, core.apply_replacements(text, dictionary.replacements))
   if final ~= "" then
     if not paste.insert(final, { restore = false }) then
@@ -592,6 +600,9 @@ local function clean_and_paste(raw)
   set_phase("processing")
   M.clean(core.build_user_message(raw, insert_ctx), function(ok, result)
     if ok then
+      -- The transcript had speech (run_pipeline gated it), so an empty answer
+      -- is the model dropping everything. Leave a trace; nothing is pasted.
+      if result == "" then log.w("cleanup returned nothing for a " .. #raw .. "-char transcript") end
       deliver(result)
     else
       log.w("cleanup failed (" .. tostring(result) .. "); pasting raw text")
@@ -915,9 +926,10 @@ end
 
 function M.debug_run(wav)
   set_phase("processing")
+  capture_context()
   transcribe(wav, function(text)
     print("transcript: " .. tostring(text))
-    if not text or text == "" then finish() return end
+    if not core.has_speech(text) then finish() return end
     clean_and_paste(text)
   end)
 end
@@ -932,6 +944,7 @@ end
 function M.debug_context(out_path)
   local ctx = paste.context(cfg.context and cfg.context.chars)
   local f = io.open(out_path, "w")
+  if not f then return "cannot write " .. tostring(out_path) end
   f:write(ctx and (ctx.before .. "\n---\n" .. ctx.after) or "nil")
   f:close()
   return ctx ~= nil

@@ -21,9 +21,22 @@ end
 -- Whisper answers silence with a lone "." / "-" (or, without VAD, a
 -- hallucinated pleasantry). Anything without a letter or digit is not speech
 -- and must not be sent for cleanup.
+-- Glyphs whisper emits for non-speech (music, trailing-off) or as typography;
+-- none of them is a word on its own.
+local NON_SPEECH_GLYPHS = { "…", "♪", "♫", "—", "–", "’", "‘", "“", "”", "·", "•" }
 function core.has_speech(text)
-  -- %w is ASCII-only in Lua; any non-ASCII byte (accented letters) counts too.
-  return type(text) == "string" and text:find("[%w\128-\255]") ~= nil
+  if type(text) ~= "string" then return false end
+  for _, g in ipairs(NON_SPEECH_GLYPHS) do text = text:gsub(g, "") end
+  -- %w is ASCII-only in Lua; any remaining non-ASCII byte (accented letters) counts too.
+  return text:find("[%w\128-\255]") ~= nil
+end
+
+-- Model output as returned by an API backend: trim the ends, normalize line
+-- endings, keep interior newlines (lists, paragraph breaks). parse_whisper is
+-- for whisper's stdout and would flatten those.
+function core.trim_output(text)
+  text = (text or ""):gsub("\r\n?", "\n")
+  return text:gsub("^%s+", ""):gsub("%s+$", "")
 end
 
 -- Cursor context: what sits immediately before/after the insertion point in
@@ -34,14 +47,20 @@ local function has_context(ctx)
   return type(ctx) == "table" and ((ctx.before or "") ~= "" or (ctx.after or "") ~= "")
 end
 
+-- Document text is untrusted input to the prompt: it must not be able to
+-- close a context block early, so the fences are stripped from it.
+local function fence_safe(text)
+  return (text:gsub("<<<", ""):gsub(">>>", ""))
+end
+
 function core.build_user_message(transcript, ctx)
   if not has_context(ctx) then return transcript end
   local parts = {}
   if (ctx.before or "") ~= "" then
-    parts[#parts + 1] = "Text before the cursor (context only, do not repeat it):\n<<<\n" .. ctx.before .. "\n>>>"
+    parts[#parts + 1] = "Text before the cursor (context only, do not repeat it):\n<<<\n" .. fence_safe(ctx.before) .. "\n>>>"
   end
   if (ctx.after or "") ~= "" then
-    parts[#parts + 1] = "Text after the cursor (context only, do not repeat it):\n<<<\n" .. ctx.after .. "\n>>>"
+    parts[#parts + 1] = "Text after the cursor (context only, do not repeat it):\n<<<\n" .. fence_safe(ctx.after) .. "\n>>>"
   end
   parts[#parts + 1] = "Transcript:\n<<<\n" .. transcript .. "\n>>>"
   return table.concat(parts, "\n\n")
@@ -51,14 +70,22 @@ end
 -- closing punctuation before the cursor, none after whitespace, a newline, or
 -- an opening bracket/quote; a trailing space when non-space text follows.
 function core.join_at_cursor(ctx, out)
-  if out == nil or out == "" or not has_context(ctx) then return out end
+  if out == nil or out == "" then return out end
+  -- Spaces/tabs at the ends are the model's, not the speaker's; a deliberate
+  -- leading newline ("new paragraph") survives.
+  out = out:gsub("^[ \t]+", ""):gsub("[ \t]+$", "")
+  if not has_context(ctx) then return out end
   local before, after = ctx.before or "", ctx.after or ""
-  local last = before:sub(-1)
-  if last ~= "" and not last:match("[%s%(%[{\"'`]") and not out:sub(1, 1):match("%s") then
+  local last, first = before:sub(-1), out:sub(1, 1)
+  -- No space after whitespace, an opener, or a character that joins to the
+  -- next one (path, URL, hyphen, identifier, address); none before
+  -- punctuation that attaches to the previous word.
+  if last ~= "" and not last:match("[%s%(%[{\"'`/%-_@#]")
+     and not first:match("[%s,%.;:%?!%)%]}]") then
     out = " " .. out
   end
   local nxt = after:sub(1, 1)
-  if nxt ~= "" and not nxt:match("[%s%)%]}%p]") and not out:sub(-1):match("%s") then
+  if nxt ~= "" and not nxt:match("[%s%)%]}>,%.;:%?!'\"]") and not out:sub(-1):match("%s") then
     out = out .. " "
   end
   return out
@@ -216,7 +243,7 @@ core.backends.anthropic = {
     if r.error then return nil, tostring(r.error.message or r.error.type or "error") end
     if r.stop_reason == "refusal" then return nil, "refusal" end
     for _, block in ipairs(r.content or {}) do
-      if block.type == "text" and type(block.text) == "string" then return core.parse_whisper(block.text) end
+      if block.type == "text" and type(block.text) == "string" then return core.trim_output(block.text) end
     end
     -- The prompt asks for an empty answer on silence; the API then sends no
     -- content blocks at all. That is a result, not a failure.
@@ -241,7 +268,7 @@ core.backends.openai = {
     local c = r.choices and r.choices[1]
     local content = c and c.message and c.message.content
     if type(content) ~= "string" then return nil, "no content" end
-    return core.parse_whisper(content)
+    return core.trim_output(content)
   end,
 }
 
@@ -272,7 +299,7 @@ core.backends.gemini = {
     local out = {}
     for _, p in ipairs(parts) do if type(p.text) == "string" then out[#out + 1] = p.text end end
     if #out == 0 then return nil, "no text" end
-    return core.parse_whisper(table.concat(out, ""))
+    return core.trim_output(table.concat(out, ""))
   end,
 }
 

@@ -144,7 +144,7 @@ Open the Hammerspoon console (menubar icon > Show console). Useful calls:
 dictate.debug_text("um so send the the report to bob")   -- cleanup + paste only
 dictate.debug_run("/path/to/16k-mono.wav")                -- transcribe + cleanup + paste
 dictate.restart_worker()
-dictate.debug_context("/tmp/ctx.txt")                     -- what the focused field exposes around the caret
+dictate.debug_context(os.getenv("HOME") .. "/ctx.txt")                     -- what the focused field exposes around the caret
 ```
 
 A stuck recording is stopped automatically after two minutes, and a stuck

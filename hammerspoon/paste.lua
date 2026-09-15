@@ -41,15 +41,20 @@ end
 -- instead of always starting a new one.
 function M.context(max_chars)
   max_chars = max_chars or 200
+  -- Same guard as insert(): a password field (or anything else holding
+  -- secure input) is never read.
+  if hs.eventtap.isSecureInputEnabled() then return nil end
   local ok, result = pcall(function()
     local ax = require("hs.axuielement")
+    local app = hs.application.frontmostApplication()
     local el = ax.systemWideElement():attributeValue("AXFocusedUIElement")
     if not el then
-      local app = hs.application.frontmostApplication()
       local ae = app and ax.applicationElement(app)
       el = ae and ae:attributeValue("AXFocusedUIElement")
     end
     if not el then return nil end
+    el:setTimeout(0.25) -- a wedged app must not stall the event tap
+    if el:attributeValue("AXSubrole") == "AXSecureTextField" then return nil end
     local range = el:attributeValue("AXSelectedTextRange")
     if type(range) ~= "table" or type(range.location) ~= "number" then return nil end
     local caret = range.location
@@ -66,14 +71,19 @@ function M.context(max_chars)
       after = slice(tail_start, math.max(0, math.min(max_chars, total - tail_start)))
     end
     if before == nil then
-      -- No AXStringForRange: fall back to the whole value when it is small.
+      -- No AXStringForRange: fall back to the whole value when it is small
+      -- (checked via the cheap character count BEFORE fetching the value)
+      -- and pure ASCII (the caret is a character offset; string.sub is bytes).
+      if type(total) ~= "number" or total > 200000 then return nil end
       local v = el:attributeValue("AXValue")
-      if type(v) ~= "string" or #v > 200000 then return nil end
+      if type(v) ~= "string" or v:find("[\128-\255]") then return nil end
       before = v:sub(math.max(1, caret - max_chars + 1), caret)
       local tail_start = caret + (range.length or 0) + 1
       after = v:sub(tail_start, tail_start + max_chars - 1)
     end
-    return { before = before or "", after = after or "" }
+    -- pid: deliver() drops the context if focus moved to another app between
+    -- the chord release and the paste.
+    return { before = before or "", after = after or "", pid = app and app:pid() or nil }
   end)
   if ok then return result end
   return nil
