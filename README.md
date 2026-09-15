@@ -25,9 +25,42 @@ its shortcut or quit it. To use a normal key chord instead, add `key = "space"`
 to `hotkey` in `hammerspoon/dictate_config.lua`.
 
 The module lives in this repo on the external drive and is symlinked into
-`~/.hammerspoon`. If the drive is not mounted, dictation is unavailable and
-Hammerspoon logs a `require` error for `dictate`, but the other hotkeys keep
-working.
+`~/.hammerspoon`. See "Always on" below for what happens if the drive is not
+yet mounted when Hammerspoon starts.
+
+## Always on
+
+Hammerspoon launches at login (`hs.autoLaunch(true)` in `~/.hammerspoon/init.lua`).
+The dictation modules are symlinks onto the external drive, and at login that
+drive can mount after Hammerspoon has already started. Instead of failing,
+`init.lua` waits: if the modules aren't there yet it shows a one-time alert,
+watches for the drive to mount and also retries every 30s, then reloads once
+they resolve. Date hotkeys (`Ctrl+Option+Command+D`/`+Shift`/`+T`) live in
+`init.lua` itself and stay bound either way, but they also need the drive
+(`paste.lua` is a symlink too) — until it mounts, pressing one shows an alert
+instead of inserting text.
+
+## Visualizer and sounds
+
+A small floating pill (`hammerspoon/dictate_overlay.lua`, built on `hs.canvas`)
+appears bottom-center of whichever screen has the mouse while you dictate,
+Wispr Flow style. It never takes keyboard focus. States: red dot + animated
+bars while recording, dim pulsing bars while cleanup is running, a brief green
+check mark on success, or a short red error message. It and the start chirp
+are both delayed by `min_hold_ms`, so a quick date-hotkey tap never flickers
+or plays a sound. Subtle system sounds (`/System/Library/Sounds`) mark start,
+stop, and errors.
+
+Config, in `hammerspoon/dictate_config.lua`:
+
+```lua
+overlay = { enabled = true, width = 168, height = 36, bottom_margin = 72, bars = 7, fps = 15 },
+sounds  = { start = "Tink", stop = "Pop", error = "Basso", volume = 0.25 },
+```
+
+Set `overlay.enabled = false` to disable the pill, or any `sounds` name to
+`false` to silence that cue. From the Hammerspoon console, `dictate.overlay_demo()`
+cycles the pill through recording -> processing -> done for a manual check.
 
 ## Choosing the cleanup backend
 

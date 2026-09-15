@@ -8,6 +8,13 @@ return {
   hotkey = { mods = { "ctrl", "alt", "cmd" } },
   min_hold_ms = 300,
 
+  -- Wispr Flow-style floating pill (hammerspoon/dictate_overlay.lua) and the
+  -- subtle system-sound cues that go with it. Both are gated by min_hold_ms
+  -- so a quick date-hotkey tap does not flicker or chirp. Set a sound name
+  -- to false to silence it; set overlay.enabled = false to disable the pill.
+  overlay = { enabled = true, width = 168, height = 36, bottom_margin = 72, bars = 7, fps = 15 },
+  sounds  = { start = "Tink", stop = "Pop", error = "Basso", volume = 0.25 },
+
   rec_bin = "/opt/homebrew/bin/rec",
   whisper_bin = "/opt/homebrew/bin/whisper-cli",
   whisper_model = home .. "/.local/share/whisper/ggml-large-v3-turbo.bin",

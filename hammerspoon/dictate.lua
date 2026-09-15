@@ -45,6 +45,10 @@ do
   end
 end
 
+-- Wispr Flow-style floating pill; see dictate_overlay.lua.
+local overlay = require("dictate_overlay")
+overlay.configure(cfg.overlay)
+
 -- Cleanup backend resolution: <repo>/.env > dictate_local > dictate_config.
 local CLEANUP
 do
@@ -67,6 +71,24 @@ local function cleanup_label()
   return CLEANUP.backend .. "/" .. CLEANUP.model
 end
 
+-- Subtle start/stop/error sounds, like Wispr Flow. Names are macOS system
+-- sounds (see /System/Library/Sounds). Set a name to false in config to mute.
+local sounds = {}
+local function load_sounds()
+  for _, k in ipairs({ "start", "stop", "error" }) do
+    local name = cfg.sounds and cfg.sounds[k]
+    if name then
+      local s = hs.sound.getByName(name)
+      if s then sounds[k] = s:volume(cfg.sounds.volume or 0.25) else log.w("sound not found: " .. tostring(name)) end
+    end
+  end
+end
+local function play_sound(k)
+  local s = sounds[k]
+  if s then pcall(function() s:stop(); s:play() end) end
+end
+load_sounds()
+
 local dictionary = { terms = {}, replacements = {} }
 do
   local ok, d = pcall(require, "dictate_dictionary")
@@ -82,6 +104,7 @@ local WHISPER_PROMPT = core.build_whisper_prompt(dictionary.terms, cfg.whisper_p
 hs.execute("mkdir -p '" .. cfg.work_dir .. "'")
 
 local M = {}
+M.overlay_demo = overlay.demo
 
 -- Environment for child processes. Hammerspoon's own env lacks ~/.local/bin
 -- and /opt/homebrew/bin; the Claude CLI needs HOME for ~/.claude.
@@ -486,6 +509,14 @@ local phase = "idle"
 local function set_phase(p)
   phase = p
   if menubar then menubar:setTitle(GLYPH[p] or GLYPH.idle) end
+  if p == "processing" then
+    overlay.processing()
+  elseif p == "idle" then
+    overlay.hide() -- no-op while a done()/error() flash is in progress
+  end
+  -- Recording has no branch here on purpose: the pill and the start sound
+  -- are delayed by min_hold_ms (see start_recording) so a quick date-hotkey
+  -- tap does not flicker or chirp.
 end
 
 local function open_console()
@@ -524,6 +555,7 @@ local function deliver(text)
       alert("Copied to clipboard instead")
     end
   end
+  overlay.done() -- before finish() so the check-mark actually shows
   finish()
 end
 
@@ -535,6 +567,8 @@ local function clean_and_paste(raw)
     else
       log.w("cleanup failed (" .. tostring(result) .. "); pasting raw text")
       alert("Cleanup failed, pasted raw text")
+      overlay.error("Cleanup failed")
+      play_sound("error")
       deliver(raw)
     end
   end)
@@ -555,6 +589,8 @@ local function transcribe_cli(wav, on_done)
     if code ~= 0 then
       log.e("whisper-cli failed: " .. (stderr or ""):sub(1, 400))
       alert("Transcription failed. See Hammerspoon console.")
+      overlay.error("Transcription failed")
+      play_sound("error")
       on_done(nil)
       return
     end
@@ -574,6 +610,8 @@ local function transcribe_cli(wav, on_done)
     log.e("whisper-cli timed out after " .. cfg.transcribe_timeout_s .. "s")
     if t:isRunning() then t:terminate() end
     alert("Transcription timed out")
+    overlay.error("Transcription timed out")
+    play_sound("error")
     on_done(nil)
   end)
 end
@@ -659,6 +697,8 @@ local function on_record_exit(seq, code, _, stderr)
   if not path or not wav_has_audio(path) then
     log.e(string.format("rec produced no audio (code %s): %s", tostring(code), (stderr or ""):sub(1, 300)))
     alert("Recording failed. Check Hammerspoon's microphone permission.")
+    overlay.error("Recording failed")
+    play_sound("error")
     if path then os.remove(path) end
     finish()
     return
@@ -686,10 +726,20 @@ local function start_recording(quiet)
     return
   end
   set_phase("recording")
+  -- Delayed so a quick date-hotkey tap (well under min_hold_ms) never shows
+  -- the pill or plays the start chirp.
+  later(cfg.min_hold_ms / 1000, function()
+    if rec_seq == my_seq and phase == "recording" and not discard then
+      overlay.recording()
+      play_sound("start")
+    end
+  end)
   later(cfg.record_max_s, function()
     if rec_seq ~= my_seq or phase ~= "recording" or not recorder then return end
     log.w("recording exceeded " .. cfg.record_max_s .. "s; stopping")
     alert("Recording stopped: too long")
+    overlay.error("Recording too long")
+    play_sound("error")
     stop_recording()
     later(5, function()
       if rec_seq ~= my_seq or phase ~= "recording" then return end
@@ -710,6 +760,7 @@ stop_recording = function()
   if phase ~= "recording" or not recorder then return end
   local held_ms = (hs.timer.secondsSinceEpoch() - pressed_at) * 1000
   if held_ms < cfg.min_hold_ms then discard = true end
+  if not discard then play_sound("stop") end
   recorder:interrupt() -- SIGINT lets sox finalize the WAV header
 end
 

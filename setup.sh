@@ -32,7 +32,7 @@ fi
 
 echo "== Symlinks into $HS_DIR"
 mkdir -p "$HS_DIR"
-for f in paste.lua json.lua dictate_core.lua dictate_config.lua dictate.lua; do
+for f in paste.lua json.lua dictate_core.lua dictate_config.lua dictate_overlay.lua dictate.lua; do
   ln -sfn "$REPO/hammerspoon/$f" "$HS_DIR/$f"
 done
 
