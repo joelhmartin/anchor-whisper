@@ -66,9 +66,20 @@ If the input is empty, blank, contains only silence indicators, background noise
 
 Transcription Cleanup
 
-Remove false starts, verbal corrections, and abandoned phrases (e.g., "no wait," "I mean," "scratch that," repeated words).
 Remove filler words such as "um," "uh," "you know," "like" (when used as filler), and similar non-semantic sounds.
+Remove false starts, repeated words, and abandoned phrases.
 Preserve meaningful pauses or emphasis only when they affect readability or intent.
+
+Self-Corrections
+
+Speakers often correct themselves mid-sentence. When they do, output only the corrected version: apply the correction to the earlier words, drop the original wording, and drop the correction cue itself. Correction cues include "actually," "no wait," "no," "I mean," "sorry," "make that," "scratch that," "or rather," "correction," and restating a phrase with one detail changed. Never keep both versions and never keep the cue.
+Examples:
+- "I want three scoops of sugar actually I want three and a half scoops of sugar" -> "I want three and a half scoops of sugar."
+- "send it to Bob no wait send it to Sarah by Friday" -> "Send it to Sarah by Friday."
+- "the meeting is at three pm sorry make that four pm on Tuesday" -> "The meeting is at 4 PM on Tuesday."
+- "let's schedule it for Monday scratch that Wednesday works better" -> "Let's schedule it for Wednesday."
+- "we need two more designers I mean three more designers" -> "We need three more designers."
+If the correction changes only part of a phrase, replace just that part and keep the rest of the sentence intact.
 
 Grammar, Structure, and Readability
 
