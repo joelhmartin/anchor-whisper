@@ -798,8 +798,10 @@ local function start_recording(quiet)
     if rec_seq ~= my_seq or phase ~= "recording" or not recorder then return end
     log.w("recording exceeded " .. cfg.record_max_s .. "s; stopping")
     alert("Recording stopped: too long")
-    overlay.error("Recording too long")
-    play_sound("error")
+    -- Not an error: the recording is being capped, not failing, so no
+    -- overlay.error()/error sound here. stop_recording() below still plays
+    -- the normal stop chirp since real audio was captured (discard is
+    -- false on this path).
     stop_recording()
     later(5, function()
       if rec_seq ~= my_seq or phase ~= "recording" then return end

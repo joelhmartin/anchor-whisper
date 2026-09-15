@@ -24,6 +24,7 @@ local flashing = false   -- true while a done/error flash is in progress
 local barHeights = {}    -- smoothed per-bar heights, carried across level() calls
 local demoTimers = {}    -- timers used only by demo()
 local state = nil        -- "recording" | "processing" | nil; gates M.level()
+local pendingState = nil -- "processing" deferred until an in-progress flash ends
 
 local BAR_W, BAR_GAP = 1.5, 1.5 -- pixels
 
@@ -63,11 +64,13 @@ local function stop_anim()
 end
 
 -- Cancels a pending done()/error() auto-hide, if any, and clears the flag
--- that makes hide() a no-op. Every state-entry function calls this first so
--- state changes are safe regardless of what the pill was doing before.
+-- that makes hide() a no-op, plus any deferred processing() (see
+-- M.processing()). Called by recording()/done()/error(), which -- unlike
+-- processing() -- always cancel-and-take-over rather than defer.
 local function stop_flash()
   if flashTimer then flashTimer:stop(); flashTimer = nil end
   flashing = false
+  pendingState = nil
 end
 
 local function min_h() return 2 end
@@ -137,6 +140,28 @@ local function force_hide()
   if canvas then canvas:hide() end
 end
 
+-- Called by the done()/error() flash timers once flashing has been cleared.
+-- If processing() was deferred while the flash was in progress (see
+-- M.processing()), enter it now instead of hiding -- the capped-recording
+-- bug this closes: a cap or an API failure marks the pill red for a full
+-- second, and the cleanup work that follows must not cut that short just
+-- because it also wants the pill.
+local function end_flash()
+  if pendingState == "processing" then
+    pendingState = nil
+    M.processing()
+  else
+    force_hide()
+  end
+end
+
+-- Returns the current state string ("recording"/"processing") or nil, for
+-- calibration/tests from the console (e.g. confirming a deferred
+-- processing() actually took over once a flash finished).
+function M.state()
+  return state
+end
+
 local function reset_bars()
   for i = 1, cfg.bars do barHeights[i] = min_h() end
 end
@@ -162,6 +187,10 @@ function M.level(l)
   local lo, hi = min_h(), max_h()
   for i = 1, cfg.bars do
     local w = bar_weight(i, cfg.bars)
+    -- The (0.9 + 0.2 * math.random()) factor is +/-10% jitter texture on
+    -- top of the real level, not a substitute for it -- it is not the
+    -- random bar-height animation that was removed from the recording
+    -- state; every bar still tracks `l`, just not perfectly identically.
     local target = lo + (hi - lo) * l * w * (0.9 + 0.2 * math.random())
     local prev = barHeights[i] or lo
     barHeights[i] = prev + (target - prev) * 0.6
@@ -169,9 +198,19 @@ function M.level(l)
   redraw(barHeights, { white = 1.0 })
 end
 
+-- Unlike recording()/done()/error(), processing() does NOT cancel an
+-- in-progress done()/error() flash: a cap ("Recording stopped: too long")
+-- or an API failure that still delivers text is not itself an error, but
+-- showing one already is, and it must run its full hold before cleanup's
+-- own bars take over. Deferred here; entered by end_flash() once the
+-- flash's own timer fires.
 function M.processing()
   if not cfg.enabled then return end
-  stop_flash()
+  if flashing then
+    pendingState = "processing"
+    return
+  end
+  stop_anim()
   reposition()
   state = "processing"
   local color = { white = 0.55 }
@@ -187,7 +226,6 @@ function M.processing()
   end
   tick()
   ensure_canvas():show()
-  stop_anim()
   animTimer = hs.timer.doEvery(1 / cfg.fps, tick)
 end
 
@@ -214,7 +252,7 @@ function M.done()
   flashTimer = hs.timer.doAfter(0.25, function()
     flashing = false
     flashTimer = nil
-    force_hide()
+    end_flash()
   end)
 end
 
@@ -232,7 +270,7 @@ function M.error(_msg)
   flashTimer = hs.timer.doAfter(1.0, function()
     flashing = false
     flashTimer = nil
-    force_hide()
+    end_flash()
   end)
 end
 
