@@ -164,6 +164,13 @@ test("parse_env_file returns empty table for nil or empty", function()
   eq(next(core.parse_env_file(nil)), nil); eq(next(core.parse_env_file("")), nil)
 end)
 
+test("parse_env_file strips an unquoted trailing comment but not a quoted one", function()
+  local t = core.parse_env_file('KEY=value   # note\nQUOTED="a # b"\nNOSPACE=value#nospace\n')
+  eq(t.KEY, "value")
+  eq(t.QUOTED, "a # b")
+  eq(t.NOSPACE, "value#nospace") -- a comment needs a space before '#'
+end)
+
 test("anthropic build shapes the Messages request", function()
   local r = core.backends.anthropic.build("claude-haiku-4-5", "K", "SYS", "hi")
   eq(r.url, "https://api.anthropic.com/v1/messages"); eq(r.headers["x-api-key"], "K")
@@ -228,6 +235,36 @@ end)
 test("resolve_cleanup falls back to local when the key is missing", function()
   local r = core.resolve_cleanup({ cleanup = { backend = "openai" }, cleanup_models = { openai = "x" } }, {}, {})
   eq(r.backend, "local"); eq(r.reason, "no key for openai")
+end)
+
+test("resolve_cleanup treats a blank DICTATE_MODEL as unset", function()
+  local cfg = { cleanup = { backend = "anthropic" }, cleanup_models = { anthropic = "provider-default" } }
+  local r = core.resolve_cleanup(cfg, { DICTATE_MODEL = "", ANTHROPIC_API_KEY = "k" }, {})
+  eq(r.backend, "anthropic"); eq(r.model, "provider-default")
+end)
+
+test("resolve_cleanup treats a blank DICTATE_BACKEND as unset", function()
+  local cfg = { cleanup = { backend = "anthropic" }, cleanup_models = {} }
+  local r = core.resolve_cleanup(cfg, { DICTATE_BACKEND = "", ANTHROPIC_API_KEY = "k" }, {})
+  eq(r.backend, "anthropic")
+end)
+
+test("resolve_cleanup treats a blank API key as unset and falls back to local", function()
+  local cfg = { cleanup = { backend = "anthropic" }, cleanup_models = {} }
+  local r = core.resolve_cleanup(cfg, { ANTHROPIC_API_KEY = "" }, {})
+  eq(r.backend, "local"); eq(r.reason, "no key for anthropic")
+end)
+
+test("resolve_cleanup resolves local_model from env, then locals, then config", function()
+  local cfg = { cleanup = { backend = "local" }, cleanup_models = {}, claude_model = "sonnet" }
+  local r = core.resolve_cleanup(cfg, { DICTATE_LOCAL_MODEL = "haiku" }, {})
+  eq(r.local_model, "haiku")
+  r = core.resolve_cleanup(cfg, {}, { claude_model = "opus" })
+  eq(r.local_model, "opus")
+  r = core.resolve_cleanup(cfg, {}, {})
+  eq(r.local_model, "sonnet")
+  r = core.resolve_cleanup(cfg, { DICTATE_LOCAL_MODEL = "" }, { claude_model = "opus" })
+  eq(r.local_model, "opus")
 end)
 
 print(string.format("%d passed, %d failed", passed, failed))

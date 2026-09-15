@@ -124,7 +124,9 @@ end
 
 -- Cleanup backends -----------------------------------------------------------
 
--- KEY=VALUE lines -> table. Ignores comments/blank lines; strips one pair of matching quotes.
+-- KEY=VALUE lines -> table. Ignores comments/blank lines; strips one pair of
+-- matching quotes, or (when unquoted) a trailing " # comment" -- a comment
+-- needs a space before '#', so "value#nospace" is left untouched.
 function core.parse_env_file(text)
   local out = {}
   for line in (text or ""):gmatch("[^\r\n]+") do
@@ -132,8 +134,12 @@ function core.parse_env_file(text)
     if trimmed ~= "" and trimmed:sub(1, 1) ~= "#" then
       local k, v = trimmed:match("^([%w_]+)%s*=%s*(.*)$")
       if k then
-        if #v >= 2 and ((v:sub(1,1) == '"' and v:sub(-1) == '"') or (v:sub(1,1) == "'" and v:sub(-1) == "'")) then
-          v = v:sub(2, -2)
+        local quote = v:sub(1, 1)
+        if quote == '"' or quote == "'" then
+          local close = v:find(quote, 2, true)
+          if close then v = v:sub(2, close - 1) end
+        else
+          v = v:gsub("%s+#.*$", "")
         end
         out[k] = v
       end
@@ -216,21 +222,31 @@ core.backends.gemini = {
   end,
 }
 
--- Decide backend/model/key. env = parsed env file, locals = dictate_local table,
--- getenv = optional function(name) (defaults to a no-op) consulted last for keys.
+-- A blank string from an env file or a dictate_local table counts as unset.
+local function nonempty(s)
+  if s == nil or s == "" then return nil end
+  return s
+end
+
+-- Decide backend/model/key/local_model. env = parsed env file, locals =
+-- dictate_local table, getenv = optional function(name) (defaults to a
+-- no-op) consulted last for keys.
 function core.resolve_cleanup(cfg, env, locals, getenv)
   env = env or {}; locals = locals or {}; getenv = getenv or function() return nil end
   local c = cfg.cleanup or {}
   local lc = (locals.cleanup or {})
-  local backend = env.DICTATE_BACKEND or lc.backend or c.backend or "local"
+  local backend = nonempty(env.DICTATE_BACKEND) or nonempty(lc.backend) or c.backend or "local"
   local models = cfg.cleanup_models or {}
-  local model = env.DICTATE_MODEL or lc.model or c.model or models[backend]
-  if backend == "local" then return { backend = "local", model = nil, key = nil } end
+  local model = nonempty(env.DICTATE_MODEL) or nonempty(lc.model) or c.model or models[backend]
+  local local_model = nonempty(env.DICTATE_LOCAL_MODEL) or nonempty(locals.claude_model) or cfg.claude_model
+  if backend == "local" then return { backend = "local", model = nil, key = nil, local_model = local_model } end
   local envname = ({ anthropic = "ANTHROPIC_API_KEY", openai = "OPENAI_API_KEY", gemini = "GEMINI_API_KEY" })[backend]
-  if not envname then return { backend = "local", reason = "unknown backend " .. tostring(backend) } end
-  local key = env[envname] or locals[backend .. "_api_key"] or getenv(envname)
-  if not key or key == "" then return { backend = "local", reason = "no key for " .. backend } end
-  return { backend = backend, model = model, key = key }
+  if not envname then
+    return { backend = "local", reason = "unknown backend " .. tostring(backend), local_model = local_model }
+  end
+  local key = nonempty(env[envname]) or nonempty(locals[backend .. "_api_key"]) or nonempty(getenv(envname))
+  if not key then return { backend = "local", reason = "no key for " .. backend, local_model = local_model } end
+  return { backend = backend, model = model, key = key, local_model = local_model }
 end
 
 -- Comma-separated spelling hint for whisper-cli --prompt, capped by length.

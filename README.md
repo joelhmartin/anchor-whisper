@@ -42,8 +42,7 @@ The transcript-cleanup step is a config choice among four backends:
 
 `local` is the default and also the automatic fallback: if an API backend
 fails or times out, that dictation falls back to the local worker (set
-`cleanup.local_fallback = false` to disable this). The local worker's model
-is still controlled by `claude_model`, separate from `cleanup.model`.
+`cleanup.local_fallback = false` to disable this).
 
 Defaults, from `hammerspoon/dictate_config.lua`:
 
@@ -56,17 +55,27 @@ cleanup_models = {
 },
 ```
 
-Keys and backend choice never go in the repo or the shell environment.
-Set them in one of, highest priority first:
+Backend, models, and keys all live in one place: **`.env` at the repo
+root** (`setup.sh` creates it from `scripts/env.example`, `chmod 600`,
+and it is gitignored — never commit it). It is plain `KEY=VALUE` lines,
+`#` comments, and quoted values:
 
-1. `~/.config/dictate/env` (created by `setup.sh` from `scripts/env.example`,
-   `chmod 600`) — `KEY=VALUE` lines: `DICTATE_BACKEND`, `DICTATE_MODEL`,
-   `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`.
-2. `~/.hammerspoon/dictate_local.lua` — any `dictate_config.lua` key,
-   plus `anthropic_api_key` / `openai_api_key` / `gemini_api_key` and a
-   `cleanup = { backend = "...", model = "..." }` table. See
-   `hammerspoon/dictate_local.example.lua`.
-3. `dictate_config.lua` defaults above.
+```
+DICTATE_BACKEND=local        # local | anthropic | openai | gemini
+DICTATE_LOCAL_MODEL=sonnet   # local worker's model: sonnet | haiku | opus
+DICTATE_MODEL=               # API model; blank = provider default
+ANTHROPIC_API_KEY=
+OPENAI_API_KEY=
+GEMINI_API_KEY=
+```
+
+Saving `.env` reloads Hammerspoon automatically. `~/.hammerspoon/dictate_local.lua`
+still works as a lower-priority override (any `dictate_config.lua` key,
+plus `anthropic_api_key` / `openai_api_key` / `gemini_api_key` and a
+`cleanup = { backend = "...", model = "..." }` table — see
+`hammerspoon/dictate_local.example.lua`), and `dictate_config.lua`'s
+defaults are the last resort. Precedence, highest first: `.env` >
+`dictate_local.lua` > `dictate_config.lua`.
 
 To compare backends side by side on the same transcript, from the
 Hammerspoon console:

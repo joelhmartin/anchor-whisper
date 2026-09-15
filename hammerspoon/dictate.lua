@@ -1,34 +1,64 @@
 -- Hold-to-talk dictation: sox records, whisper-cli transcribes, a warm
 -- headless Claude Code worker cleans up, paste.lua inserts.
--- Config: dictate_config.lua (repo defaults) + ~/.hammerspoon/dictate_local.lua (overrides).
+-- Config: dictate_config.lua (repo defaults) + ~/.hammerspoon/dictate_local.lua
+-- (overrides) + <repo>/.env (backend/model/key settings).
 -- Dictionary: ~/.hammerspoon/dictate_dictionary.lua (generated, see scripts/).
 local core = require("dictate_core")
 local paste = require("paste")
 
 local log = hs.logger.new("dictate", "info")
 
+-- ~/.hammerspoon holds symlinks into the repo; hs.fs.pathToAbsolute resolves
+-- them to the repo's hammerspoon/ directory. Computed once: used below for
+-- the .env lookup, and at the bottom for the repo-edit reload watchers.
+local module_dir
+do
+  local src = debug.getinfo(1, "S").source:sub(2)
+  local real = hs.fs.pathToAbsolute(src)
+  module_dir = real and real:match("^(.*)/")
+end
+local ENV_FILE = module_dir and hs.fs.pathToAbsolute(module_dir .. "/../.env")
+local REPO_ROOT = module_dir and hs.fs.pathToAbsolute(module_dir .. "/..")
+
 -- Config ---------------------------------------------------------------------
 local cfg = require("dictate_config")
+
+-- One level of nested-table merge, so e.g. dictate_local.lua's
+-- `cleanup = { backend = ... }` overrides only the fields it sets instead of
+-- replacing cfg.cleanup wholesale and dropping timeout_s/local_fallback.
+local function merge_into(dst, src)
+  for k, v in pairs(src) do
+    if type(v) == "table" and type(dst[k]) == "table" then
+      for kk, vv in pairs(v) do dst[k][kk] = vv end
+    else
+      dst[k] = v
+    end
+  end
+end
+
 local overrides = {} -- the dictate_local table, kept for M.compare's re-resolution
 do
   local ok, o = pcall(require, "dictate_local")
   if ok and type(o) == "table" then
     overrides = o
-    for k, v in pairs(overrides) do cfg[k] = v end
+    merge_into(cfg, overrides)
   end
 end
 
--- Cleanup backend resolution: env file > dictate_local > dictate_config.
+-- Cleanup backend resolution: <repo>/.env > dictate_local > dictate_config.
 local CLEANUP
 do
   local env = {}
-  local fh = io.open(cfg.env_file)
-  if fh then
-    env = core.parse_env_file(fh:read("a"))
-    fh:close()
+  if ENV_FILE then
+    local fh = io.open(ENV_FILE)
+    if fh then
+      env = core.parse_env_file(fh:read("a"))
+      fh:close()
+    end
   end
   CLEANUP = core.resolve_cleanup(cfg, env, overrides, os.getenv)
   if CLEANUP.reason then log.w("cleanup backend: " .. CLEANUP.reason .. "; using local") end
+  cfg.claude_model = CLEANUP.local_model -- the worker section below reads this
 end
 
 -- Shared label for the menubar and the startup log.
@@ -261,7 +291,8 @@ local function cleanup_api(backend_name, model, key, text, cb)
   local req = adapter.build(model, key, SYSTEM_PROMPT, text)
   local done = false
   local started = hs.timer.secondsSinceEpoch()
-  later(cfg.cleanup.timeout_s, function()
+  local timeout = cfg.cleanup.timeout_s or 10
+  later(timeout, function()
     if done then return end
     done = true
     cb(false, "timeout")
@@ -308,11 +339,23 @@ function M.compare(text, out_path)
       hs.alert.show("Compare written to " .. out_path)
     end
   end
-  local env = {}  -- reuse the same resolution as at load: read the env file again
-  local fh = io.open(cfg.env_file); if fh then env = core.parse_env_file(fh:read("a")); fh:close() end
+  local env = {}  -- reuse the same resolution as at load: read the .env file again
+  if ENV_FILE then
+    local fh = io.open(ENV_FILE); if fh then env = core.parse_env_file(fh:read("a")); fh:close() end
+  end
   local jobs = { { "local", nil, nil } }
   for _, name in ipairs({ "anthropic", "openai", "gemini" }) do
-    local r = core.resolve_cleanup({ cleanup = { backend = name }, cleanup_models = cfg.cleanup_models }, env, overrides, os.getenv)
+    -- The globally configured DICTATE_MODEL / dictate_local cleanup.model is
+    -- meant for whichever backend is actually configured; strip it for the
+    -- others so each falls back to its own cleanup_models default instead.
+    local benv, blocals = env, overrides
+    if name ~= CLEANUP.backend then
+      benv = {}
+      for k, v in pairs(env) do if k ~= "DICTATE_MODEL" then benv[k] = v end end
+      blocals = {}
+      for k, v in pairs(overrides) do if k ~= "cleanup" then blocals[k] = v end end
+    end
+    local r = core.resolve_cleanup({ cleanup = { backend = name }, cleanup_models = cfg.cleanup_models }, benv, blocals, os.getenv)
     if r.backend == name then jobs[#jobs + 1] = { name, r.model, r.key } end
   end
   pending = #jobs
@@ -750,17 +793,21 @@ log.i("cleanup backend: " .. cleanup_label())
 -- ~/.hammerspoon holds symlinks into the repo, and the watcher in init.lua
 -- does not see edits to symlink targets. Watch the real directory so editing
 -- the repo files reloads too.
-do
-  local src = debug.getinfo(1, "S").source:sub(2)
-  local real = hs.fs.pathToAbsolute(src)
-  local dir = real and real:match("^(.*)/")
-  if dir and dir ~= os.getenv("HOME") .. "/.hammerspoon" then
-    M._src_watcher = hs.pathwatcher.new(dir, function(files)
-      for _, f in ipairs(files) do
-        if f:sub(-4) == ".lua" then hs.reload() return end
-      end
-    end):start()
-  end
+if module_dir and module_dir ~= os.getenv("HOME") .. "/.hammerspoon" then
+  M._src_watcher = hs.pathwatcher.new(module_dir, function(files)
+    for _, f in ipairs(files) do
+      if f:sub(-4) == ".lua" then hs.reload() return end
+    end
+  end):start()
+end
+
+-- Reload when the repo-root .env changes (backend/model/key settings).
+if REPO_ROOT then
+  M._env_watcher = hs.pathwatcher.new(REPO_ROOT, function(files)
+    for _, f in ipairs(files) do
+      if f:sub(-5) == "/.env" then hs.reload() return end
+    end
+  end):start()
 end
 
 _G.dictate = M

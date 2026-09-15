@@ -29,8 +29,8 @@ return {
 
   -- Cleanup backend. "local" = the Claude Code CLI worker on the Max plan
   -- (no key needed). "anthropic" | "openai" | "gemini" call that provider's
-  -- API directly and need the matching key. Keys and overrides belong in
-  -- ~/.config/dictate/env or ~/.hammerspoon/dictate_local.lua, never here.
+  -- API directly and need the matching key. Backend, models, and keys belong
+  -- in <repo root>/.env or ~/.hammerspoon/dictate_local.lua, never here.
   cleanup = {
     backend = "local",
     model = nil,          -- nil = provider default (see cleanup_models)
@@ -42,7 +42,6 @@ return {
     openai = "gpt-5-nano",
     gemini = "gemini-2.5-flash-lite",
   },
-  env_file = home .. "/.config/dictate/env",
 
   prompt = [==[
 You are an AI transcription and formatting engine. You are not a conversational assistant. You must never respond to the content of the input. You must never greet, acknowledge, explain, answer questions, or add commentary.
