@@ -1,24 +1,31 @@
--- Wispr Flow-style floating pill: a small hs.canvas window, bottom-center of
--- whichever screen has the mouse, that shows recording/processing/done/error
--- without ever taking keyboard focus or stealing focus from the app the user
--- is dictating into.
+-- Wispr Flow-style floating pill: a tiny opaque capsule flush with the
+-- bottom edge of whichever screen has the mouse, that shows recording (real
+-- microphone level), processing, done, and error without ever taking
+-- keyboard focus.
 --
 -- One canvas object is created lazily and reused for the process lifetime.
--- Every timer (the bar-animation ticker and a pending done()/error() hide)
--- is held in a module local so Hammerspoon's timer GC cannot silently stop
--- it (see dictate.lua's `later()` for the same concern).
+-- Every timer (the processing-state ripple ticker and a pending done()/
+-- error() hide) is held in a module local so Hammerspoon's timer GC cannot
+-- silently stop it (see dictate.lua's `later()` for the same concern).
+--
+-- Recording-state bars are NOT self-animated: they move only when
+-- dictate.lua calls M.level(l) with a real reading off the WAV sox is
+-- writing (see read_level() there). If no level() call ever arrives, the
+-- bars simply stay at rest (min height) -- there is no synthetic fallback
+-- animation.
 local M = {}
 
-local cfg = { enabled = true, width = 168, height = 36, bottom_margin = 72, bars = 7, fps = 15 }
+local cfg = { enabled = true, width = 60, height = 26, bottom_margin = 10, bars = 12, fps = 20 }
 
 local canvas = nil
-local animTimer = nil    -- bar-animation ticker, recreated per state
+local animTimer = nil    -- processing-state ripple ticker only
 local flashTimer = nil   -- pending done()/error() auto-hide
 local flashing = false   -- true while a done/error flash is in progress
-local barHeights = {}    -- smoothed per-bar heights, carried across ticks
+local barHeights = {}    -- smoothed per-bar heights, carried across level() calls
 local demoTimers = {}    -- timers used only by demo()
+local state = nil        -- "recording" | "processing" | nil; gates M.level()
 
-local BAR_LEFT = 32 -- leaves room for the status dot on the left
+local BAR_W, BAR_GAP = 1.5, 1.5 -- pixels
 
 function M.configure(overlay_cfg)
   if type(overlay_cfg) ~= "table" then return end
@@ -28,24 +35,26 @@ end
 local function ensure_canvas()
   if canvas then return canvas end
   canvas = hs.canvas.new({ x = 0, y = 0, w = cfg.width, h = cfg.height })
-  canvas:level(hs.canvas.windowLevels.overlay)
+  canvas:level(hs.canvas.windowLevels.overlay) -- draws above the Dock
   canvas:behavior({ "canJoinAllSpaces", "stationary" })
   canvas:clickActivating(false)
   canvas:alpha(0.95)
   return canvas
 end
 
--- Bottom-center of whichever screen currently has the mouse pointer.
--- Recomputed on every state change since the user may switch screens
--- mid-session.
+-- Bottom-center of whichever screen currently has the mouse, floating
+-- `bottom_margin` px above the very bottom edge of the display (fullFrame,
+-- not frame, so it sits over the Dock rather than above it -- Wispr Flow's
+-- own placement). Recomputed on every state change since the user may
+-- switch screens mid-session.
 local function reposition()
   local c = ensure_canvas()
   local screen = hs.mouse.getCurrentScreen() or hs.screen.mainScreen()
   if not screen then return end
-  local frame = screen:frame()
+  local full = screen:fullFrame()
   c:topLeft({
-    x = frame.x + (frame.w - cfg.width) / 2,
-    y = frame.y + frame.h - cfg.bottom_margin - cfg.height,
+    x = full.x + (full.w - cfg.width) / 2,
+    y = full.y + full.h - cfg.height - cfg.bottom_margin,
   })
 end
 
@@ -61,37 +70,52 @@ local function stop_flash()
   flashing = false
 end
 
-local function base_elements(dot_color)
-  return {
-    {
-      type = "rectangle", action = "fill",
-      frame = { x = 0, y = 0, w = cfg.width, h = cfg.height },
-      roundedRectRadii = { xRadius = 18, yRadius = 18 },
-      fillColor = { red = 0.1, green = 0.1, blue = 0.12, alpha = 0.85 },
-    },
-    {
-      type = "circle", action = "fill",
-      center = { x = 16, y = cfg.height / 2 },
-      radius = 5,
-      fillColor = dot_color,
-    },
-  }
+local function min_h() return 2 end
+local function max_h() return cfg.height - 10 end
+
+-- Symmetric envelope: 1.0 at the middle bar, tapering to 0.25 at the edges,
+-- so the pill looks like a little waveform instead of a flat block.
+local function bar_weight(i, n)
+  local center = (n + 1) / 2
+  local ratio = math.abs(i - center) / center
+  if ratio > 1 then ratio = 1 end
+  return 0.25 + 0.75 * (1 - ratio) ^ 1.5
 end
 
-local function bar_geometry(i)
-  local usable = cfg.width - BAR_LEFT - 12
-  local gap = usable / cfg.bars
-  return BAR_LEFT + gap * (i - 1) + gap * 0.25, gap * 0.5 -- x, w
+local function bars_left()
+  local total = cfg.bars * BAR_W + (cfg.bars - 1) * BAR_GAP
+  return (cfg.width - total) / 2
+end
+
+local function bar_x(i)
+  return bars_left() + (i - 1) * (BAR_W + BAR_GAP)
+end
+
+local function pill_element()
+  return {
+    type = "rectangle", action = "fill",
+    frame = { x = 0, y = 0, w = cfg.width, h = cfg.height },
+    roundedRectRadii = { xRadius = cfg.height / 2, yRadius = cfg.height / 2 },
+    fillColor = { red = 0.02, green = 0.02, blue = 0.02, alpha = 1.0 },
+  }
 end
 
 local function bar_element(i, h, color)
-  local x, w = bar_geometry(i)
   return {
     type = "rectangle", action = "fill",
-    frame = { x = x, y = (cfg.height - h) / 2, w = w, h = h },
-    roundedRectRadii = { xRadius = w / 2, yRadius = w / 2 },
+    frame = { x = bar_x(i), y = (cfg.height - h) / 2, w = BAR_W, h = h },
+    roundedRectRadii = { xRadius = BAR_W / 2, yRadius = BAR_W / 2 },
     fillColor = color,
   }
+end
+
+local function redraw(heights, color)
+  local c = ensure_canvas()
+  local els = { pill_element() }
+  for i = 1, cfg.bars do
+    els[#els + 1] = bar_element(i, heights[i] or min_h(), color)
+  end
+  c:replaceElements(els)
 end
 
 -- Hides the pill. A no-op while a done()/error() flash is in progress (that
@@ -100,6 +124,7 @@ end
 function M.hide()
   if not cfg.enabled then return end
   if flashing then return end
+  state = nil
   stop_anim()
   if canvas then canvas:hide() end
 end
@@ -107,51 +132,74 @@ end
 -- Used internally by the done()/error() timers, which must hide even though
 -- `flashing` is still true at the moment they fire (they clear it first).
 local function force_hide()
+  state = nil
   stop_anim()
   if canvas then canvas:hide() end
+end
+
+local function reset_bars()
+  for i = 1, cfg.bars do barHeights[i] = min_h() end
 end
 
 function M.recording()
   if not cfg.enabled then return end
   stop_flash()
-  reposition()
-  local c = ensure_canvas()
-  local color = { red = 0.9, green = 0.2, blue = 0.2 }
-  for i = 1, cfg.bars do barHeights[i] = barHeights[i] or 4 end
-  local function redraw()
-    local els = base_elements(color)
-    for i = 1, cfg.bars do
-      local target = math.random(4, math.max(4, cfg.height - 12))
-      barHeights[i] = barHeights[i] + (target - barHeights[i]) * 0.5
-      els[#els + 1] = bar_element(i, barHeights[i], color)
-    end
-    c:replaceElements(els)
-  end
-  redraw()
-  c:show()
   stop_anim()
-  animTimer = hs.timer.doEvery(1 / cfg.fps, redraw)
+  reposition()
+  state = "recording"
+  reset_bars() -- rest at min height until a real level() reading arrives
+  redraw(barHeights, { white = 1.0 })
+  ensure_canvas():show()
+end
+
+-- Real microphone level, 0..1, fed by dictate.lua's WAV-tail reader at
+-- cfg.fps. Ignored outside the recording state (e.g. a late/stale reading
+-- that arrives after processing() has already taken over).
+function M.level(l)
+  if not cfg.enabled or state ~= "recording" then return end
+  l = l or 0
+  if l < 0 then l = 0 elseif l > 1 then l = 1 end
+  local lo, hi = min_h(), max_h()
+  for i = 1, cfg.bars do
+    local w = bar_weight(i, cfg.bars)
+    local target = lo + (hi - lo) * l * w * (0.9 + 0.2 * math.random())
+    local prev = barHeights[i] or lo
+    barHeights[i] = prev + (target - prev) * 0.6
+  end
+  redraw(barHeights, { white = 1.0 })
 end
 
 function M.processing()
   if not cfg.enabled then return end
   stop_flash()
   reposition()
-  local c = ensure_canvas()
+  state = "processing"
   local color = { white = 0.55 }
-  local function redraw()
-    local els = base_elements(color)
-    -- oscillates between 4 and 12
-    local h = 4 + (math.sin(os.clock() * 4) * 0.5 + 0.5) * 8
+  local lo, hi = min_h(), max_h()
+  local function tick()
+    local heights = {}
     for i = 1, cfg.bars do
-      els[#els + 1] = bar_element(i, h, color)
+      local w = bar_weight(i, cfg.bars)
+      local ripple = 0.5 + 0.5 * math.sin(os.clock() * 5 + i * 0.9)
+      heights[i] = lo + (hi - lo) * 0.3 * w * ripple
     end
-    c:replaceElements(els)
+    redraw(heights, color)
   end
-  redraw()
-  c:show()
+  tick()
+  ensure_canvas():show()
   stop_anim()
-  animTimer = hs.timer.doEvery(1 / cfg.fps, redraw)
+  animTimer = hs.timer.doEvery(1 / cfg.fps, tick)
+end
+
+-- A static envelope (no motion, no randomness) at a fixed level, used by
+-- both done() and error() -- they differ only in color and hold time.
+local function envelope_heights(level)
+  local lo, hi = min_h(), max_h()
+  local heights = {}
+  for i = 1, cfg.bars do
+    heights[i] = lo + (hi - lo) * level * bar_weight(i, cfg.bars)
+  end
+  return heights
 end
 
 function M.done()
@@ -159,60 +207,51 @@ function M.done()
   stop_flash()
   stop_anim()
   reposition()
-  local c = ensure_canvas()
-  local green = { red = 0.25, green = 0.8, blue = 0.35 }
-  local els = base_elements(green)
-  local cx, cy = (BAR_LEFT + cfg.width - 12) / 2, cfg.height / 2
-  els[#els + 1] = {
-    type = "segments", action = "stroke", closed = false,
-    strokeColor = green, strokeWidth = 2.5,
-    coordinates = {
-      { x = cx - 10, y = cy },
-      { x = cx - 3, y = cy + 7 },
-      { x = cx + 12, y = cy - 8 },
-    },
-  }
-  c:replaceElements(els)
-  c:show()
+  state = nil
+  redraw(envelope_heights(0.6), { red = 0.35, green = 0.85, blue = 0.45 })
+  ensure_canvas():show()
   flashing = true
-  flashTimer = hs.timer.doAfter(0.35, function()
+  flashTimer = hs.timer.doAfter(0.25, function()
     flashing = false
     flashTimer = nil
     force_hide()
   end)
 end
 
-function M.error(msg)
+-- `msg` is accepted for API compatibility but not drawn -- the pill never
+-- shows text; the existing hs.alert calls already carry the words.
+function M.error(_msg)
   if not cfg.enabled then return end
   stop_flash()
   stop_anim()
   reposition()
-  local c = ensure_canvas()
-  msg = tostring(msg or "Error"):sub(1, 24)
-  local red = { red = 0.85, green = 0.2, blue = 0.2 }
-  local els = base_elements(red)
-  els[1].fillColor = { red = 0.35, green = 0.08, blue = 0.08, alpha = 0.9 }
-  els[#els + 1] = {
-    type = "text",
-    frame = { x = BAR_LEFT, y = 0, w = cfg.width - BAR_LEFT - 8, h = cfg.height },
-    text = msg, textSize = 12, textColor = { white = 1 }, textAlignment = "left",
-  }
-  c:replaceElements(els)
-  c:show()
+  state = nil
+  redraw(envelope_heights(0.6), { red = 0.95, green = 0.3, blue = 0.3 })
+  ensure_canvas():show()
   flashing = true
-  flashTimer = hs.timer.doAfter(1.5, function()
+  flashTimer = hs.timer.doAfter(1.0, function()
     flashing = false
     flashTimer = nil
     force_hide()
   end)
 end
 
--- Cycles recording -> processing -> done for manual checks from the console.
+-- Cycles recording (fed a synthetic level ramp) -> processing -> done, for
+-- manual checks from the console.
 function M.demo()
   if not cfg.enabled then return end
   M.recording()
-  demoTimers[1] = hs.timer.doAfter(1.5, function() M.processing() end)
-  demoTimers[2] = hs.timer.doAfter(3.0, function() M.done() end)
+  local t0 = hs.timer.secondsSinceEpoch()
+  demoTimers[1] = hs.timer.doEvery(1 / cfg.fps, function()
+    local t = hs.timer.secondsSinceEpoch() - t0
+    if t > 1.5 then
+      if demoTimers[1] then demoTimers[1]:stop(); demoTimers[1] = nil end
+      return
+    end
+    M.level(0.5 + 0.5 * math.sin(t * 6))
+  end)
+  demoTimers[2] = hs.timer.doAfter(1.5, function() M.processing() end)
+  demoTimers[3] = hs.timer.doAfter(3.0, function() M.done() end)
 end
 
 return M

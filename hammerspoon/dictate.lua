@@ -547,7 +547,10 @@ local function finish()
 end
 
 -- Cleanup + paste -------------------------------------------------------------
-local function deliver(text)
+-- skip_done: true when the caller already showed overlay.error() for this
+-- delivery (the cleanup-API-failed-but-raw-text-still-pasted path) -- a
+-- done() right after would just overwrite the error flash a moment later.
+local function deliver(text, skip_done)
   local final = core.apply_replacements(text, dictionary.replacements)
   if final ~= "" then
     if not paste.insert(final, { restore = false }) then
@@ -555,7 +558,9 @@ local function deliver(text)
       alert("Copied to clipboard instead")
     end
   end
-  overlay.done() -- before finish() so the check-mark actually shows
+  if not skip_done then
+    overlay.done() -- before finish() so the check-mark actually shows
+  end
   finish()
 end
 
@@ -569,7 +574,7 @@ local function clean_and_paste(raw)
       alert("Cleanup failed, pasted raw text")
       overlay.error("Cleanup failed")
       play_sound("error")
-      deliver(raw)
+      deliver(raw, true)
     end
   end)
 end
@@ -684,8 +689,55 @@ local function wav_has_audio(path)
   return attrs ~= nil and attrs.size > 44
 end
 
+-- Real microphone level for the overlay: RMS of the last 50 ms of the WAV
+-- sox is writing. Cheap enough at 20 fps (1600 bytes per read).
+local level_timer = nil
+local function read_level(path)
+  local f = io.open(path, "rb")
+  if not f then return 0 end
+  local size = f:seek("end")
+  local n = 1600 -- 50 ms at 16 kHz, 16-bit mono
+  if not size or size < 44 + n then f:close() return 0 end
+  f:seek("set", size - n)
+  local data = f:read(n) or ""
+  f:close()
+  local sum, count = 0, 0
+  for i = 1, #data - 1, 2 do
+    local s = string.unpack("<i2", data, i)
+    sum = sum + s * s
+    count = count + 1
+  end
+  if count == 0 then return 0 end
+  local rms = math.sqrt(sum / count)          -- 0..32767
+  -- Knee tuned against tests/fixtures/sample.wav: its last 50ms (a soft
+  -- trailing breath, not full-volume speech) reads ~154 RMS and needs to
+  -- land mid-range; 300 left it under 0.1. See debug_level().
+  local KNEE = 15
+  local level = math.log(1 + rms / KNEE) / math.log(1 + 32767 / KNEE) -- perceptual-ish 0..1
+  if level > 1 then level = 1 end
+  return level
+end
+
+local function start_level_meter(path, seq)
+  if level_timer then level_timer:stop() end
+  level_timer = hs.timer.doEvery(1 / cfg.overlay.fps, function()
+    if rec_seq ~= seq or phase ~= "recording" then
+      if level_timer then level_timer:stop(); level_timer = nil end
+      return
+    end
+    overlay.level(read_level(path))
+  end)
+end
+local function stop_level_meter()
+  if level_timer then level_timer:stop(); level_timer = nil end
+end
+
 local function on_record_exit(seq, code, _, stderr)
   if seq ~= rec_seq then return end -- a zombie rec from a reset recording; ignore
+  -- NB: placed after the seq guard, not before it -- a zombie exit from a
+  -- hard-reset recording (see the watchdog below) must not stop the level
+  -- meter belonging to whatever NEW recording may already be running.
+  stop_level_meter()
   recorder = nil
   local path = wav_path
   wav_path = nil
@@ -718,7 +770,14 @@ local function start_recording(quiet)
   wav_path = hs.fs.temporaryDirectory() .. string.format("dictate-%d.wav", os.time())
   recorder = hs.task.new(cfg.rec_bin,
     function(code, out, err) on_record_exit(my_seq, code, out, err) end,
-    { "-q", "-c", "1", "-r", "16000", "-b", "16", wav_path })
+    -- --buffer is a sox global option and must come first: it keeps rec's
+    -- I/O buffer small so bytes hit the file promptly, for the level meter.
+    -- 512 (and even 1024) reliably triggers CoreAudio "unhandled buffer
+    -- overrun. Data discarded." on this Mac -- dropped audio, not just
+    -- lower latency -- confirmed across repeated runs; 2048 showed zero
+    -- overruns in the same testing and still keeps latency well under the
+    -- meter's 50ms read window.
+    { "--buffer", "2048", "-q", "-c", "1", "-r", "16000", "-b", "16", wav_path })
   recorder:setEnvironment(child_env())
   if not recorder:start() then
     recorder = nil
@@ -732,6 +791,7 @@ local function start_recording(quiet)
     if rec_seq == my_seq and phase == "recording" and not discard then
       overlay.recording()
       play_sound("start")
+      start_level_meter(wav_path, my_seq)
     end
   end)
   later(cfg.record_max_s, function()
@@ -747,6 +807,7 @@ local function start_recording(quiet)
       later(5, function()
         if rec_seq ~= my_seq or phase ~= "recording" then return end
         log.e("rec did not exit; resetting")
+        stop_level_meter()
         recorder = nil
         if wav_path then os.remove(wav_path) end
         wav_path = nil
@@ -761,6 +822,7 @@ stop_recording = function()
   local held_ms = (hs.timer.secondsSinceEpoch() - pressed_at) * 1000
   if held_ms < cfg.min_hold_ms then discard = true end
   if not discard then play_sound("stop") end
+  stop_level_meter() -- no point reading the tail once the mic has stopped
   recorder:interrupt() -- SIGINT lets sox finalize the WAV header
 end
 
@@ -814,6 +876,13 @@ else
 end
 
 -- Debug entry points for the console ------------------------------------------
+
+-- Runs the overlay's real level reader against a WAV file, for calibration
+-- from `hs -c` (no microphone or paste involved). Returns a number 0..1.
+function M.debug_level(wav)
+  return read_level(wav)
+end
+
 function M.debug_run(wav)
   set_phase("processing")
   transcribe(wav, function(text)

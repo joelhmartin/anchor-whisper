@@ -12,7 +12,7 @@ return {
   -- subtle system-sound cues that go with it. Both are gated by min_hold_ms
   -- so a quick date-hotkey tap does not flicker or chirp. Set a sound name
   -- to false to silence it; set overlay.enabled = false to disable the pill.
-  overlay = { enabled = true, width = 168, height = 36, bottom_margin = 72, bars = 7, fps = 15 },
+  overlay = { enabled = true, width = 60, height = 26, bottom_margin = 10, bars = 12, fps = 20 },
   sounds  = { start = "Tink", stop = "Pop", error = "Basso", volume = 0.25 },
 
   rec_bin = "/opt/homebrew/bin/rec",

@@ -42,21 +42,29 @@ instead of inserting text.
 
 ## Visualizer and sounds
 
-A small floating pill (`hammerspoon/dictate_overlay.lua`, built on `hs.canvas`)
-appears bottom-center of whichever screen has the mouse while you dictate,
-Wispr Flow style. It never takes keyboard focus. States: red dot + animated
-bars while recording, dim pulsing bars while cleanup is running, a brief green
-check mark on success, or a short red error message. It and the start chirp
-are both delayed by `min_hold_ms`, so a quick date-hotkey tap never flickers
-or plays a sound. Subtle system sounds (`/System/Library/Sounds`) mark start,
-stop, and errors.
+A tiny opaque black capsule (`hammerspoon/dictate_overlay.lua`, built on
+`hs.canvas`) sits flush with the very bottom edge of whichever screen has the
+mouse while you dictate, Wispr Flow style — no dot, no text, just a row of
+white bars. It never takes keyboard focus. While recording the bars track
+your actual microphone level in real time (dictate.lua reads the RMS of the
+last 50ms of the WAV `rec` is writing, a few times a second); at silence they
+rest flat. While cleanup is running the bars dim and ripple gently on their
+own. A brief green flash marks success, a brief red flash marks an error (the
+existing `hs.alert` popup still carries the words; the pill itself never
+shows text). The pill and the start chirp are both delayed by `min_hold_ms`,
+so a quick date-hotkey tap never flickers or plays a sound. Subtle system
+sounds (`/System/Library/Sounds`) mark start, stop, and errors.
 
 Config, in `hammerspoon/dictate_config.lua`:
 
 ```lua
-overlay = { enabled = true, width = 168, height = 36, bottom_margin = 72, bars = 7, fps = 15 },
+overlay = { enabled = true, width = 60, height = 26, bottom_margin = 10, bars = 12, fps = 20 },
 sounds  = { start = "Tink", stop = "Pop", error = "Basso", volume = 0.25 },
 ```
+
+`bottom_margin` is the gap, in pixels, between the pill and the very bottom
+edge of the display (measured from the screen's full frame, so it floats
+over the Dock area rather than above it).
 
 Set `overlay.enabled = false` to disable the pill, or any `sounds` name to
 `false` to silence that cue. From the Hammerspoon console, `dictate.overlay_demo()`
