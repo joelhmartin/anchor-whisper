@@ -51,7 +51,7 @@ cleanup = { backend = "local", model = nil, timeout_s = 10, local_fallback = tru
 cleanup_models = {
   anthropic = "claude-haiku-4-5",
   openai = "gpt-5-nano",
-  gemini = "gemini-2.5-flash-lite",
+  gemini = "gemini-3.5-flash-lite",
 },
 ```
 

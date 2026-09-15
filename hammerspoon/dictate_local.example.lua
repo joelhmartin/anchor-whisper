@@ -8,7 +8,7 @@ return {
   -- Use a direct API backend instead of the local Claude Code worker.
   -- Prefer <repo root>/.env for this (see scripts/env.example); these keys
   -- are here only as a reminder of the names dictate_core expects.
-  -- cleanup = { backend = "gemini", model = "gemini-2.5-flash-lite" },
+  -- cleanup = { backend = "gemini", model = "gemini-3.5-flash-lite" },
   -- anthropic_api_key = "sk-ant-...",
   -- openai_api_key = "sk-...",
   -- gemini_api_key = "...",
