@@ -24,21 +24,25 @@ Control+Option, it may start its own recording as you press the chord; change
 its shortcut or quit it. To use a normal key chord instead, add `key = "space"`
 to `hotkey` in `hammerspoon/dictate_config.lua`.
 
-The module lives in this repo on the external drive and is symlinked into
-`~/.hammerspoon`. See "Always on" below for what happens if the drive is not
-yet mounted when Hammerspoon starts.
+The module lives in this repo at `~/Developer/anchor-whisper` and is symlinked
+into `~/.hammerspoon`. `setup.sh` creates those symlinks, so re-run it after
+moving the repo.
 
 ## Always on
 
 Hammerspoon launches at login (`hs.autoLaunch(true)` in `~/.hammerspoon/init.lua`).
-The dictation modules are symlinks onto the external drive, and at login that
-drive can mount after Hammerspoon has already started. Instead of failing,
-`init.lua` waits: if the modules aren't there yet it shows a one-time alert,
-watches for the drive to mount and also retries every 30s, then reloads once
-they resolve. Date hotkeys (`Ctrl+Option+Command+D`/`+Shift`/`+T`) live in
-`init.lua` itself and stay bound either way, but they also need the drive
-(`paste.lua` is a symlink too) — until it mounts, pressing one shows an alert
-instead of inserting text.
+The dictation modules are symlinks into this repo, and the repo is on the boot
+volume, so they always resolve — nothing has to be plugged in. Date hotkeys
+(`Ctrl+Option+Command+D`/`+Shift`/`+T`) live in `init.lua` itself and use
+`paste.lua` from here.
+
+Keep it that way. The repo sat on an external SSD until 2026-09-16, and because
+that drive could mount *after* Hammerspoon had already started, `init.lua`
+needed a wait-for-mount guard — a one-time alert, an `hs.fs.volume` watcher and
+a 30s retry timer that reloaded once the symlinks resolved. Moving to the
+internal drive deleted all of it. Putting the repo back on removable storage,
+or anywhere that can go away (an iCloud-synced folder counts: files there can be
+evicted to the cloud), means bringing that guard back.
 
 ## Visualizer and sounds
 
