@@ -999,5 +999,30 @@ if REPO_ROOT then
   end):start()
 end
 
+-- Hammerspoon does not kill an hs.task's child when the Lua state is torn down,
+-- and the watchers above make teardown routine: every reload used to orphan the
+-- resident whisper-server. It stayed a child of Hammerspoon holding ~1.6 GB of
+-- loaded model, invisible outside `ps`, and three had piled up by 2026-09-16.
+-- The cleanup worker never showed this because it retires itself when idle.
+-- hs.shutdownCallback runs on reload and on quit, which are the only two ways
+-- out. Chained rather than assigned: it is a single global, so overwriting it
+-- would silently drop anyone else's handler.
+local function stop_child(entry)
+  if entry and entry.task and entry.task:isRunning() then entry.task:terminate() end
+end
+
+local prior_shutdown = hs.shutdownCallback
+function hs.shutdownCallback()
+  -- Named one at a time rather than looped: each of the four is nil at some
+  -- point in the boot/recycle dance, and a table constructor holding a nil cuts
+  -- an ipairs walk short -- which would skip the pending server, the very case
+  -- a reload-during-boot leaks.
+  stop_child(whisper.active)
+  stop_child(whisper.pending)
+  stop_child(worker)
+  stop_child(pending_worker)
+  if prior_shutdown then prior_shutdown() end
+end
+
 _G.dictate = M
 return M
