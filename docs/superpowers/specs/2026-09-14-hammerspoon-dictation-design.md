@@ -3,6 +3,13 @@
 Date: 2026-09-14
 Status: approved design, replaces the Tauri application
 
+> **Historical record — as designed, not as built.** Details drifted during
+> implementation and this file is deliberately not rewritten to match. Most
+> visibly, the trigger below is Ctrl+Space; the shipped trigger is holding
+> **Control+Option** with no key (`hotkey = { mods = { "ctrl", "alt" } }`).
+> For current behaviour read `README.md` and `hammerspoon/dictate_config.lua`,
+> which are the source of truth.
+
 ## Goal
 
 Hold a hotkey, speak, release, and have cleaned-up text pasted into whatever

@@ -17,8 +17,12 @@ echo "== Homebrew packages"
 for f in whisper-cpp sox lua; do
   brew list --formula "$f" >/dev/null 2>&1 || brew install "$f"
 done
-for bin in /opt/homebrew/bin/rec /opt/homebrew/bin/whisper-cli /opt/homebrew/bin/lua; do
-  [ -x "$bin" ] || { echo "Missing $bin after install" >&2; exit 1; }
+# Ask brew where it lives rather than assuming /opt/homebrew: Intel Macs use
+# /usr/local, and the check would fail there on a perfectly good install.
+# dictate_config.lua resolves the same binaries the same way at load.
+BREW_PREFIX="$(brew --prefix)"
+for bin in rec whisper-cli lua; do
+  [ -x "$BREW_PREFIX/bin/$bin" ] || { echo "Missing $BREW_PREFIX/bin/$bin after install" >&2; exit 1; }
 done
 
 echo "== Whisper model ($MODEL)"

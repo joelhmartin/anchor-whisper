@@ -2,6 +2,20 @@
 -- Override any key in ~/.hammerspoon/dictate_local.lua (see dictate_local.example.lua).
 local home = os.getenv("HOME")
 
+-- Homebrew installs under /opt/homebrew on Apple Silicon and /usr/local on
+-- Intel, and setup.sh takes the prefix from `brew --prefix`. Hardcoding one of
+-- them left rec/whisper unrunnable on the other, and hs.task fails with a bare
+-- "does not exist". First prefix that actually holds the binary wins; a custom
+-- prefix is handled by setting the *_bin keys in dictate_local.lua.
+local function brew_bin(name)
+  for _, prefix in ipairs({ "/opt/homebrew", "/usr/local" }) do
+    local path = prefix .. "/bin/" .. name
+    local f = io.open(path, "r")
+    if f then f:close() return path end
+  end
+  return "/opt/homebrew/bin/" .. name -- report the usual path in the missing-binary error
+end
+
 return {
   -- Hold these modifiers (with no other key) to record. Add key = "space"
   -- to use a normal key chord instead.
@@ -23,18 +37,22 @@ return {
   -- context-free.
   context = { enabled = true, chars = 200 },
 
-  rec_bin = "/opt/homebrew/bin/rec",
-  whisper_bin = "/opt/homebrew/bin/whisper-cli",
+  rec_bin = brew_bin("rec"),
+  whisper_bin = brew_bin("whisper-cli"),
   whisper_model = home .. "/.local/share/whisper/ggml-large-v3-turbo.bin",
   -- Silero voice-activity model (setup.sh downloads it). With it, whisper
   -- skips non-speech audio: silence comes back empty instead of as "." or a
   -- hallucinated "Thank you." Missing file = VAD off.
   whisper_vad_model = home .. "/.local/share/whisper/ggml-silero-v5.1.2.bin",
   whisper_prompt_max_chars = 600,
-  whisper_server_bin = "/opt/homebrew/bin/whisper-server",
+  whisper_server_bin = brew_bin("whisper-server"),
   whisper_port = 18081,            -- loopback only
   whisper_server_boot_s = 30,      -- give up waiting for readiness after this
-  whisper_request_timeout_s = 10,  -- curl -m for a single /inference request
+  -- curl -m for a single /inference request. Matches transcribe_timeout_s: at
+  -- 10s a long recording made curl exit 28, which marked a healthy server dead,
+  -- booted a replacement and re-ran the whole WAV through whisper-cli -- slower
+  -- than simply waiting for the answer that was already coming.
+  whisper_request_timeout_s = 60,
 
   claude_bin = home .. "/.local/bin/claude",
   claude_model = "sonnet",   -- "sonnet", "haiku", or "opus"; edit here to experiment

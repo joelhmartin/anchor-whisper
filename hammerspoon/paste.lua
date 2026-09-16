@@ -26,9 +26,15 @@ function M.insert(text, opts)
   local restore = opts.restore ~= false
   local saved = restore and hs.pasteboard.readAllData() or nil
   hs.pasteboard.setContents(text)
+  -- Whatever we just wrote is the newest thing on the pasteboard. If the count
+  -- has moved on by the time we restore, the user copied something during the
+  -- delay and putting the old clipboard back would silently destroy their copy.
+  local ours = hs.pasteboard.changeCount()
   hs.eventtap.keyStroke({ "cmd" }, "v")
   if saved then
-    hs.timer.doAfter(0.6, function() hs.pasteboard.writeAllData(saved) end)
+    hs.timer.doAfter(0.6, function()
+      if hs.pasteboard.changeCount() == ours then hs.pasteboard.writeAllData(saved) end
+    end)
   end
   return true
 end

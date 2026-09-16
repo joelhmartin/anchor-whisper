@@ -1,10 +1,16 @@
 # anchor-whisper
 
 Hold **Control+Option**, talk, release. About a second and a half later the cleaned-up
-text is pasted into whatever app you were in. Runs entirely on this Mac
-through Hammerspoon: local Whisper for speech-to-text, and a headless Claude
-Code worker on your Claude subscription for cleanup. No API keys, no cloud
-transcription, no app to update.
+text is pasted into whatever app you were in. Runs on this Mac through
+Hammerspoon, with no app to update.
+
+**Where your words go.** Speech-to-text is local: Whisper runs on this machine
+and the audio never leaves it. Cleanup is not. The transcript is sent to
+whichever backend `DICTATE_BACKEND` names — a Claude Code worker on your Claude
+subscription, or the Anthropic, OpenAI or Gemini API — along with the cursor
+context (`context.enabled`) and your dictionary terms, which travel in the
+prompt. Only the `local` backend needs no API key, and it still leaves the Mac.
+Set `context = { enabled = false }` to stop sending surrounding text.
 
 ## Install
 
@@ -121,6 +127,12 @@ plus `anthropic_api_key` / `openai_api_key` / `gemini_api_key` and a
 `hammerspoon/dictate_local.example.lua`), and `dictate_config.lua`'s
 defaults are the last resort. Precedence, highest first: `.env` >
 `dictate_local.lua` > `dictate_config.lua`.
+
+Process environment variables are a fallback for **API keys only**, and only
+after both files: `.env` > `dictate_local.lua` > `ANTHROPIC_API_KEY` /
+`OPENAI_API_KEY` / `GEMINI_API_KEY` in the environment. The backend and model
+are never read from the environment — set those in `.env`. (Keeping keys out of
+the shell is the point of `.env`; the fallback exists for one-off tests.)
 
 To compare backends side by side on the same transcript, from the
 Hammerspoon console:

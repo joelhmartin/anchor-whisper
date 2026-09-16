@@ -223,7 +223,7 @@ function M.processing()
     local heights = {}
     for i = 1, cfg.bars do
       local w = bar_weight(i, cfg.bars)
-      local ripple = 0.5 + 0.5 * math.sin(os.clock() * 5 + i * 0.9)
+      local ripple = 0.5 + 0.5 * math.sin(hs.timer.secondsSinceEpoch() * 5 + i * 0.9)
       heights[i] = lo + (hi - lo) * 0.3 * w * ripple
     end
     redraw(heights, color)

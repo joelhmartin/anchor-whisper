@@ -93,31 +93,52 @@ end
 
 -- Replace each spoken phrase (table key, lowercase) with its written form,
 -- case-insensitively, matching whole phrases only. Longer keys win.
+--
+-- One left-to-right pass over the original text, never over its own output: a
+-- pass-per-key loop reassigning `text` let replacements chain, so "foo"->"bar"
+-- plus "bar"->"baz" pasted "baz". The dictionary rewrites what was said, and
+-- nothing it produces is eligible to be rewritten again.
 function core.apply_replacements(text, replacements)
   if not replacements or next(replacements) == nil then return text end
   local keys = {}
   for k in pairs(replacements) do if k ~= "" then keys[#keys + 1] = k end end
-  table.sort(keys, function(a, b) return #a > #b end)
-  for _, key in ipairs(keys) do
-    local needle = key:lower()
-    local lower = text:lower()
-    local out, pos = {}, 1
-    while true do
-      local s, e = lower:find(needle, pos, true)
-      if not s then out[#out + 1] = text:sub(pos); break end
-      local before = s > 1 and text:sub(s - 1, s - 1) or ""
-      local after = text:sub(e + 1, e + 1)
-      if not is_word_char(before) and not is_word_char(after) then
-        out[#out + 1] = text:sub(pos, s - 1)
-        out[#out + 1] = replacements[key]
-      else
-        out[#out + 1] = text:sub(pos, e)
+  if #keys == 0 then return text end
+  -- Longest first so "anchor corps" beats "anchor". Equal lengths are broken
+  -- by name: two keys can overlap without being the same length ("a b"/"b c"),
+  -- and pairs() order is not stable, so without this the winner could differ
+  -- between runs on the same input.
+  table.sort(keys, function(a, b)
+    if #a ~= #b then return #a > #b end
+    return a < b
+  end)
+  local needles = {}
+  for i, k in ipairs(keys) do needles[i] = k:lower() end
+
+  local lower = text:lower()
+  local n = #text
+  local out, pos = {}, 1
+  while pos <= n do
+    local hit_key, hit_end
+    for i, needle in ipairs(needles) do
+      local e = pos + #needle - 1
+      if e <= n and lower:sub(pos, e) == needle then
+        local before = pos > 1 and text:sub(pos - 1, pos - 1) or ""
+        local after = text:sub(e + 1, e + 1)
+        if not is_word_char(before) and not is_word_char(after) then
+          hit_key, hit_end = keys[i], e
+          break
+        end
       end
-      pos = e + 1
     end
-    text = table.concat(out)
+    if hit_key then
+      out[#out + 1] = replacements[hit_key]
+      pos = hit_end + 1
+    else
+      out[#out + 1] = text:sub(pos, pos)
+      pos = pos + 1
+    end
   end
-  return text
+  return table.concat(out)
 end
 
 -- LineBuffer: accumulates stdout chunks and yields complete lines.

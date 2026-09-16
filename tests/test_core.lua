@@ -51,6 +51,19 @@ test("apply_replacements prefers longer phrases", function()
      "AC and A")
 end)
 
+test("apply_replacements never feeds one replacement into another", function()
+  -- The dictionary rewrites the cleaned transcript, not its own output. With
+  -- a scan-the-result loop, "foo"->"bar" then "bar"->"baz" pasted "baz".
+  eq(core.apply_replacements("foo", { ["foo"] = "bar", ["bar"] = "baz" }), "bar")
+end)
+
+test("apply_replacements resolves overlapping equal-length matches leftmost-first", function()
+  -- "a b" and "b c" both match in "a b c" and overlap on the b. Equal lengths,
+  -- so the old length-only sort left the winner up to pairs() order.
+  eq(core.apply_replacements("a b c", { ["a b"] = "X", ["b c"] = "Y" }), "X c")
+  eq(core.apply_replacements("a b c", { ["b c"] = "Y", ["a b"] = "X" }), "X c")
+end)
+
 test("apply_replacements handles nil and empty tables", function()
   eq(core.apply_replacements("unchanged", nil), "unchanged")
   eq(core.apply_replacements("unchanged", {}), "unchanged")
