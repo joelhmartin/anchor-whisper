@@ -426,13 +426,53 @@ end
 
 local start_server -- forward declaration
 
+-- Servers on their way out, held until the OS process is confirmed gone.
+-- terminate() only sends SIGTERM and returns immediately; a whisper-server
+-- still loading its 1.6 GB model can miss it. adopt() used to ask once and
+-- then drop its only reference to the old entry, which left the process
+-- tracked by nothing -- not active, not pending, so not even the shutdown
+-- sweep could see it. Two servers, 1.7 GB each, were found alive on
+-- 2026-09-16, one of them 41 minutes after being replaced.
+local retiring = {}
+
+-- SIGTERM went unanswered, so escalate. hs.task can only send SIGTERM, hence
+-- the shelling out. Re-checking isRunning() first keeps us from SIGKILLing a
+-- recycled pid, and comm is verified for the same reason: this is kill -9 on
+-- a number that was only ever ours by assumption.
+local function reap(entry, attempt)
+  if not entry.task:isRunning() then retiring[entry] = nil return end
+  local pid = entry.task:pid()
+  if attempt > 3 or not pid or pid <= 0 then
+    log.e(string.format("whisper-server (port %d, pid %s) outlived SIGKILL; giving up on it",
+      entry.port, tostring(pid)))
+    retiring[entry] = nil
+    return
+  end
+  local comm = hs.execute("/bin/ps -p " .. pid .. " -o comm=") or ""
+  if not comm:find("whisper-server", 1, true) then
+    retiring[entry] = nil -- exited already; the pid now belongs to someone else
+    return
+  end
+  log.w(string.format("whisper-server (port %d, pid %d) still up after terminate; sending SIGKILL",
+    entry.port, pid))
+  hs.execute("/bin/kill -9 " .. pid)
+  later(2, function() reap(entry, attempt + 1) end)
+end
+
+local function retire(entry)
+  if not entry then return end
+  retiring[entry] = true
+  if entry.task:isRunning() then entry.task:terminate() end
+  later(2, function() reap(entry, 1) end)
+end
+
 local function adopt(entry)
   local old = whisper.active
   whisper.active = entry
   whisper.ready = true
   whisper.attempts = 0
   log.i("whisper-server ready on port " .. entry.port)
-  if old and old ~= entry and old.task:isRunning() then old.task:terminate() end
+  if old and old ~= entry then retire(old) end
 end
 
 -- A 200 on the target port is not proof this entry's own process answered it:
@@ -458,7 +498,7 @@ local function probe(entry, deadline)
     if hs.timer.secondsSinceEpoch() > deadline then
       log.e("whisper-server on port " .. entry.port .. " never became ready; giving up on it")
       if whisper.pending == entry then whisper.pending = nil end
-      entry.task:terminate()
+      retire(entry) -- same reason as adopt(): a bare terminate() can go unheard
       return
     end
     later(0.5, function() probe(entry, deadline) end)
@@ -1021,6 +1061,9 @@ function hs.shutdownCallback()
   stop_child(whisper.pending)
   stop_child(worker)
   stop_child(pending_worker)
+  -- Anything still on its way out. Looping is safe here where the four above
+  -- are not: this is a set, so it never holds a nil to cut the walk short.
+  for entry in pairs(retiring) do stop_child(entry) end
   if prior_shutdown then prior_shutdown() end
 end
 
