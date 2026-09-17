@@ -707,8 +707,8 @@ end
 -- work burning CPU to produce a result nobody would read -- which on a loaded
 -- machine is exactly what makes the next dictation stall.
 local inflight = {}
-local function track(t) inflight[t] = true return t end
-local function untrack(t) inflight[t] = nil end
+local function track(t) if t then inflight[t] = true end return t end
+local function untrack(t) if t then inflight[t] = nil end end
 
 -- gen is the run this transcription belongs to. Checked here, not only at the
 -- end of the pipeline, because transcribe_cli re-enters "processing": a server
@@ -775,7 +775,11 @@ local function transcribe_server(wav, on_done, gen)
   if WHISPER_PROMPT ~= "" then
     args[#args + 1] = "--form-string"; args[#args + 1] = "prompt=" .. WHISPER_PROMPT
   end
-  local t = hs.task.new("/usr/bin/curl", function(code, stdout, stderr)
+  -- Declared before it is assigned: in `local t = expr`, t is not in scope
+  -- inside expr, so the callback below would capture a nil global instead of
+  -- this task (which is exactly what broke every server-path dictation).
+  local t
+  t = hs.task.new("/usr/bin/curl", function(code, stdout, stderr)
     if done then return end
     done = true
     untrack(t)
