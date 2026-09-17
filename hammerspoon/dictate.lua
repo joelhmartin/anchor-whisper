@@ -702,7 +702,21 @@ local function clean_and_paste(raw, gen)
 end
 
 -- Transcription ----------------------------------------------------------------
-local function transcribe_cli(wav, on_done)
+
+-- curl/whisper-cli tasks currently running. Without this, cancelling left the
+-- work burning CPU to produce a result nobody would read -- which on a loaded
+-- machine is exactly what makes the next dictation stall.
+local inflight = {}
+local function track(t) inflight[t] = true return t end
+local function untrack(t) inflight[t] = nil end
+
+-- gen is the run this transcription belongs to. Checked here, not only at the
+-- end of the pipeline, because transcribe_cli re-enters "processing": a server
+-- request that failed after the user cancelled fell back to the CLI, which put
+-- the phase back and re-showed the pill. Three failed requests re-opened it
+-- three times.
+local function transcribe_cli(wav, on_done, gen)
+  if gen and gen ~= run_gen then return end
   set_phase("processing")
   local args = whisper_model_args()
   for _, a in ipairs({ "-f", wav, "-np" }) do args[#args + 1] = a end
@@ -714,6 +728,8 @@ local function transcribe_cli(wav, on_done)
   t = hs.task.new(cfg.whisper_bin, function(code, stdout, stderr)
     if done then return end
     done = true
+    untrack(t)
+    if gen and gen ~= run_gen then return end
     if code ~= 0 then
       log.e("whisper-cli failed: " .. (stderr or ""):sub(1, 400))
       alert("Transcription failed. See Hammerspoon console.")
@@ -726,8 +742,10 @@ local function transcribe_cli(wav, on_done)
     on_done(core.parse_whisper(stdout))
   end, args)
   t:setEnvironment(child_env())
+  track(t)
   if not t:start() then
     done = true
+    untrack(t)
     alert("Could not start whisper-cli at " .. cfg.whisper_bin)
     on_done(nil)
     return
@@ -735,8 +753,10 @@ local function transcribe_cli(wav, on_done)
   later(cfg.transcribe_timeout_s, function()
     if done then return end
     done = true
-    log.e("whisper-cli timed out after " .. cfg.transcribe_timeout_s .. "s")
+    untrack(t)
     if t:isRunning() then t:terminate() end
+    if gen and gen ~= run_gen then return end
+    log.e("whisper-cli timed out after " .. cfg.transcribe_timeout_s .. "s")
     alert("Transcription timed out")
     overlay.error("Transcription timed out")
     play_sound("error")
@@ -746,7 +766,8 @@ end
 
 -- Resident-server path: POST the WAV with curl. Falls back to whisper-cli
 -- when the server is not ready or the request fails.
-local function transcribe_server(wav, on_done)
+local function transcribe_server(wav, on_done, gen)
+  if gen and gen ~= run_gen then return end
   local done = false
   local target = whisper.active
   local args = { "-s", "-m", tostring(cfg.whisper_request_timeout_s), "-X", "POST", whisper_url("/inference"),
@@ -757,6 +778,10 @@ local function transcribe_server(wav, on_done)
   local t = hs.task.new("/usr/bin/curl", function(code, stdout, stderr)
     if done then return end
     done = true
+    untrack(t)
+    -- An abandoned run must not condemn the server either: a request the user
+    -- gave up on is no evidence the server is unhealthy.
+    if gen and gen ~= run_gen then return end
     local text = (code == 0) and core.parse_server_response(stdout) or nil
     if text == nil then
       log.w(string.format("whisper-server request failed (code %s); falling back to whisper-cli", tostring(code)))
@@ -764,25 +789,28 @@ local function transcribe_server(wav, on_done)
         whisper.ready = false
         M.restart_whisper()
       end
-      transcribe_cli(wav, on_done)
+      transcribe_cli(wav, on_done, gen)
       return
     end
     log.i("transcribed via server")
     on_done(text)
   end, args)
   t:setEnvironment(child_env())
+  track(t)
   if not t:start() then
     done = true
-    transcribe_cli(wav, on_done)
+    untrack(t)
+    transcribe_cli(wav, on_done, gen)
   end
 end
 
-local function transcribe(wav, on_done)
+local function transcribe(wav, on_done, gen)
+  if gen and gen ~= run_gen then return end
   set_phase("processing")
   if whisper.ready then
-    transcribe_server(wav, on_done)
+    transcribe_server(wav, on_done, gen)
   else
-    transcribe_cli(wav, on_done)
+    transcribe_cli(wav, on_done, gen)
   end
 end
 
@@ -798,7 +826,7 @@ local function run_pipeline(wav)
     end
     log.i("transcript: " .. #text .. " chars")
     clean_and_paste(text, gen)
-  end)
+  end, gen)
 end
 
 -- Recording -------------------------------------------------------------------
@@ -874,6 +902,12 @@ cancel = function(reason)
     recorder = nil
   end
   if wav_path then os.remove(wav_path); wav_path = nil end
+  -- Stop the work itself, not just its result. On a loaded machine an
+  -- abandoned whisper run competes with the next dictation for the CPU.
+  for t in pairs(inflight) do
+    if t:isRunning() then t:terminate() end
+    inflight[t] = nil
+  end
   overlay.error(reason)  -- red flash, so a cancel is visibly different from a paste
   play_sound("error")
   finish()               -- sets phase idle, which clears the watchdog and Esc
@@ -1054,7 +1088,7 @@ function M.debug_run(wav)
     print("transcript: " .. tostring(text))
     if not core.has_speech(text) then finish() return end
     clean_and_paste(text, gen)
-  end)
+  end, gen)
 end
 
 function M.debug_text(text)
