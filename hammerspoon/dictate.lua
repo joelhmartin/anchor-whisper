@@ -559,11 +559,36 @@ local GLYPH = {
 }
 local phase = "idle"
 
+-- Assigned far below, once the recording state it has to tear down exists.
+-- Declared here because set_phase's watchdog, the Esc hotkey and the menubar
+-- item all reach for it.
+local cancel
+local cancel_hotkey
+
+-- Fires only when a run will never finish on its own. It is deliberately
+-- slack: the legitimate worst case chains the timeouts below it -- a
+-- whisper-server request that burns whisper_request_timeout_s, the whisper-cli
+-- fallback that burns transcribe_timeout_s, then cleanup.timeout_s, about 130s
+-- with the shipped values. A tighter watchdog would kill healthy long jobs,
+-- which is the failure it is meant to prevent. Impatience is Esc's job, not
+-- this timer's.
+local stuck_timer = nil
+
 local function set_phase(p)
   phase = p
   if menubar then menubar:setTitle(GLYPH[p] or GLYPH.idle) end
+  if stuck_timer then stuck_timer:stop(); stuck_timer = nil end
+  -- Esc is live only while a dictation is: otherwise this would swallow
+  -- Escape everywhere in macOS.
+  if cancel_hotkey then
+    if p == "idle" then cancel_hotkey:disable() else cancel_hotkey:enable() end
+  end
   if p == "processing" then
     overlay.processing()
+    stuck_timer = hs.timer.doAfter(cfg.stuck_timeout_s or 180, function()
+      stuck_timer = nil
+      cancel("stuck")
+    end)
   elseif p == "idle" then
     overlay.hide() -- no-op while a done()/error() flash is in progress
   end
@@ -583,6 +608,7 @@ if menubar then
     return {
       { title = "Dictation: " .. phase .. " (" .. cleanup_label() .. ")", disabled = true },
       { title = "-" },
+      { title = "Cancel dictation", fn = function() cancel("menu") end, disabled = (phase == "idle") },
       { title = "Restart Claude worker", fn = M.restart_worker },
       { title = "Restart Whisper server", fn = M.restart_whisper },
       { title = "Reload Hammerspoon config", fn = hs.reload },
@@ -599,6 +625,12 @@ end
 -- released (the caret is where the text will land), fed to the cleanup
 -- model, and used for the spacing of the paste. Never logged.
 local insert_ctx = nil
+
+-- Bumped by cancel() and by every new recording. A pipeline callback captures
+-- it at the start of its run and bails if it no longer matches, so an
+-- abandoned run cannot paste into the document minutes later. rec_seq cannot
+-- serve here: it is declared with the recording state, below deliver().
+local run_gen = 0
 
 local function capture_context()
   insert_ctx = nil
@@ -624,7 +656,8 @@ end
 -- skip_done: true when the caller already showed overlay.error() for this
 -- delivery (the cleanup-API-failed-but-raw-text-still-pasted path) -- a
 -- done() right after would just overwrite the error flash a moment later.
-local function deliver(text, skip_done)
+local function deliver(text, skip_done, gen)
+  if gen and gen ~= run_gen then return end -- cancelled while we were working
   -- Context was read at chord release; if the user has since switched apps
   -- the paste lands somewhere else, so the spacing derived from it is wrong.
   if insert_ctx and insert_ctx.pid then
@@ -644,20 +677,26 @@ local function deliver(text, skip_done)
   finish()
 end
 
-local function clean_and_paste(raw)
+-- gen is the run this text belongs to; a caller starting a fresh run from the
+-- console (debug_text) passes nothing and is guarded from here on. Anything
+-- resuming after an async hop MUST pass the value it captured before that hop,
+-- or a cancelled run will paste.
+local function clean_and_paste(raw, gen)
+  gen = gen or run_gen
   set_phase("processing")
   M.clean(core.build_user_message(raw, insert_ctx), function(ok, result)
+    if gen ~= run_gen then return end -- cancelled while the model was thinking
     if ok then
       -- The transcript had speech (run_pipeline gated it), so an empty answer
       -- is the model dropping everything. Leave a trace; nothing is pasted.
       if result == "" then log.w("cleanup returned nothing for a " .. #raw .. "-char transcript") end
-      deliver(result)
+      deliver(result, false, gen)
     else
       log.w("cleanup failed (" .. tostring(result) .. "); pasting raw text")
       alert("Cleanup failed, pasted raw text")
       overlay.error("Cleanup failed")
       play_sound("error")
-      deliver(raw, true)
+      deliver(raw, true, gen)
     end
   end)
 end
@@ -748,15 +787,17 @@ local function transcribe(wav, on_done)
 end
 
 local function run_pipeline(wav)
+  local gen = run_gen
   transcribe(wav, function(text)
     os.remove(wav)
+    if gen ~= run_gen then return end -- cancelled while whisper was working
     if not core.has_speech(text) then
       if text then log.i("nothing transcribed") end
       finish()
       return
     end
     log.i("transcript: " .. #text .. " chars")
-    clean_and_paste(text)
+    clean_and_paste(text, gen)
   end)
 end
 
@@ -816,6 +857,34 @@ local function stop_level_meter()
   if level_timer then level_timer:stop(); level_timer = nil end
 end
 
+-- The single way out of a dictation that should not finish: Esc, the menubar
+-- item, and the stuck watchdog all land here. Bumping both counters is the
+-- point -- rec_seq retires the recording's own watchdogs and exit handler,
+-- run_gen retires the transcribe/cleanup callbacks that are already in flight
+-- and would otherwise paste into the document long after the user gave up.
+cancel = function(reason)
+  if phase == "idle" then return end
+  log.w("dictation cancelled (" .. tostring(reason) .. ") from " .. phase)
+  run_gen = run_gen + 1
+  rec_seq = rec_seq + 1
+  discard = true
+  stop_level_meter()
+  if recorder then
+    if recorder:isRunning() then recorder:terminate() end
+    recorder = nil
+  end
+  if wav_path then os.remove(wav_path); wav_path = nil end
+  overlay.error(reason)  -- red flash, so a cancel is visibly different from a paste
+  play_sound("error")
+  finish()               -- sets phase idle, which clears the watchdog and Esc
+end
+
+-- Created disabled: set_phase enables it only while a dictation is running, so
+-- Escape keeps its normal meaning in every app the rest of the time.
+cancel_hotkey = hs.hotkey.new({}, "escape", function() cancel("escape") end)
+M._cancel_hotkey = cancel_hotkey -- keep a reference; unreferenced hotkeys are collected
+M.cancel = function() cancel("api") end
+
 local function on_record_exit(seq, code, _, stderr)
   if seq ~= rec_seq then return end -- a zombie rec from a reset recording; ignore
   -- NB: placed after the seq guard, not before it -- a zombie exit from a
@@ -849,6 +918,7 @@ local function start_recording(quiet)
   end
   discard = false
   rec_seq = rec_seq + 1
+  run_gen = run_gen + 1 -- a new dictation retires the previous one's callbacks
   local my_seq = rec_seq
   pressed_at = hs.timer.secondsSinceEpoch()
   wav_path = hs.fs.temporaryDirectory() .. string.format("dictate-%d.wav", os.time())
@@ -975,10 +1045,15 @@ end
 function M.debug_run(wav)
   set_phase("processing")
   capture_context()
+  -- Captured before the async hop for the same reason run_pipeline does it:
+  -- without this a cancel mid-transcribe still pasted, and the continuation
+  -- re-entered processing and re-armed the stuck watchdog.
+  local gen = run_gen
   transcribe(wav, function(text)
+    if gen ~= run_gen then return end
     print("transcript: " .. tostring(text))
     if not core.has_speech(text) then finish() return end
-    clean_and_paste(text)
+    clean_and_paste(text, gen)
   end)
 end
 

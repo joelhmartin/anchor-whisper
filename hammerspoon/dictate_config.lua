@@ -54,6 +54,13 @@ return {
   -- than simply waiting for the answer that was already coming.
   whisper_request_timeout_s = 60,
 
+  -- Backstop for a run that will never finish, after which the dictation is
+  -- cancelled and the hotkey works again. Slack on purpose: the legitimate
+  -- worst case is whisper_request_timeout_s + transcribe_timeout_s +
+  -- cleanup.timeout_s (~130s above), and a tighter value would abort healthy
+  -- long jobs. Press Esc when you simply do not want to wait.
+  stuck_timeout_s = 180,
+
   claude_bin = home .. "/.local/bin/claude",
   claude_model = "sonnet",   -- "sonnet", "haiku", or "opus"; edit here to experiment
   work_dir = home .. "/.local/share/dictate/work", -- empty dir so no CLAUDE.md is picked up

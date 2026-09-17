@@ -50,6 +50,32 @@ internal drive deleted all of it. Putting the repo back on removable storage,
 or anywhere that can go away (an iCloud-synced folder counts: files there can be
 evicted to the cloud), means bringing that guard back.
 
+## Cancelling a dictation
+
+Press **Esc** while a dictation is recording or processing and it stops: the
+pill flashes red, nothing is pasted, and the hotkey works again immediately.
+The menubar has a **Cancel dictation** entry that does the same thing. Esc is
+bound only while a dictation is actually running, so it keeps its normal
+meaning in every app the rest of the time.
+
+Cancelling is not just a UI convenience. A transcript that was already in
+flight must not land in the document a few seconds after you gave up on it, so
+each run carries a generation number that is bumped on cancel (and on starting
+the next dictation); a transcribe or cleanup callback whose generation no
+longer matches is dropped instead of pasted.
+
+`stuck_timeout_s` (default 180s, in `dictate_config.lua`) is the backstop for a
+run that will never finish on its own -- before it existed, a hung `processing`
+phase blocked the hotkey until Hammerspoon was reloaded, because
+`start_recording` refuses to start unless the phase is `idle`. It is slack on
+purpose: the legitimate worst case chains the timeouts beneath it, a
+whisper-server request burning `whisper_request_timeout_s`, the whisper-cli
+fallback burning `transcribe_timeout_s`, then `cleanup.timeout_s` -- about 130s
+with the shipped values. A tighter watchdog would abort healthy long jobs,
+which is the failure it exists to prevent. Esc is the answer to "this is taking
+too long"; the watchdog only catches "this is never coming back". Recording
+needs no watchdog: `record_max_s` already caps it.
+
 ## Visualizer and sounds
 
 A tiny opaque black capsule (`hammerspoon/dictate_overlay.lua`, built on
