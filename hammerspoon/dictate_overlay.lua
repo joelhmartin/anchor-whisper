@@ -23,6 +23,10 @@ local flashTimer = nil   -- pending done()/error() auto-hide
 local flashing = false   -- true while a done/error flash is in progress
 local barHeights = {}    -- smoothed per-bar heights, carried across level() calls
 local demoTimers = {}    -- timers used only by demo()
+local hovering = false   -- pointer is over the pill: show the cancel affordance
+local cancel_cb = nil    -- set by M.on_cancel; the overlay knows nothing else about it
+local lastHeights = nil  -- last drawn bars, so a hover can re-render without new data
+local lastColor = nil
 local state = nil        -- "recording" | "processing" | nil; gates M.level()
 local pendingState = nil -- "processing" deferred until an in-progress flash ends
 
@@ -33,14 +37,42 @@ function M.configure(overlay_cfg)
   for k, v in pairs(overlay_cfg) do cfg[k] = v end
 end
 
+-- Registers what a click on the pill means. Kept as a callback so this module
+-- stays a view: it knows a click happened, not what a dictation is.
+function M.on_cancel(fn)
+  cancel_cb = fn
+end
+
 local function ensure_canvas()
   if canvas then return canvas end
   canvas = hs.canvas.new({ x = 0, y = 0, w = cfg.width, h = cfg.height })
   canvas:level(hs.canvas.windowLevels.overlay) -- draws above the Dock
   canvas:behavior({ "canJoinAllSpaces", "stationary" })
-  canvas:clickActivating(false)
+  canvas:clickActivating(false) -- a click must not pull focus out of the user's app
   canvas:alpha(0.95)
+  -- Whole-canvas events rather than per-element tracking: the pill is 60x26,
+  -- so a literal 10px glyph would be a poor target. Hovering anywhere over it
+  -- shows the X and clicking anywhere cancels.
+  -- Only mouseDown is taken from the event system. Hover is decided by testing
+  -- the pointer against the frame on each redraw instead of by an enterExit
+  -- tracking area: the tracking area does not fire for synthetic moves, which
+  -- makes it untestable, and a missed mouseExit would strand the X on screen.
+  -- The pill already redraws at cfg.fps while recording or processing, so
+  -- polling costs one point comparison per frame and cannot desync.
+  canvas:canvasMouseEvents(true, false, false, false)
+  canvas:mouseCallback(function(_, message)
+    -- Only while a dictation is actually running: during a done/error flash
+    -- state is nil and there is nothing left to cancel.
+    if message == "mouseDown" and state and cancel_cb then cancel_cb() end
+  end)
   return canvas
+end
+
+local function pointer_over_pill()
+  if not canvas then return false end
+  local p = hs.mouse.absolutePosition()
+  local f = canvas:frame()
+  return p.x >= f.x and p.x <= f.x + f.w and p.y >= f.y and p.y <= f.y + f.h
 end
 
 -- Bottom-center of whichever screen currently has the mouse, floating
@@ -112,13 +144,34 @@ local function bar_element(i, h, color)
   }
 end
 
+-- Replaces the bars entirely while hovering rather than dimming them: at this
+-- size a crossed-out waveform reads as noise, where a bare X reads as a button.
+local function cancel_element()
+  return {
+    type = "text", text = "✕",
+    textSize = cfg.height - 12, textColor = { white = 1.0 }, textAlignment = "center",
+    frame = { x = 0, y = 2, w = cfg.width, h = cfg.height - 4 },
+  }
+end
+
 local function redraw(heights, color)
+  lastHeights, lastColor = heights, color
+  hovering = (state ~= nil) and pointer_over_pill()
   local c = ensure_canvas()
   local els = { pill_element() }
-  for i = 1, cfg.bars do
-    els[#els + 1] = bar_element(i, heights[i] or min_h(), color)
+  if hovering and state then
+    els[#els + 1] = cancel_element()
+  else
+    for i = 1, cfg.bars do
+      els[#els + 1] = bar_element(i, heights[i] or min_h(), color)
+    end
   end
   c:replaceElements(els)
+end
+
+-- Re-renders the last frame, for a hover that arrives between animation ticks.
+function M.refresh()
+  if lastHeights then redraw(lastHeights, lastColor) end
 end
 
 -- Hides the pill. No-op while a done()/error() flash is in progress (that
@@ -132,6 +185,7 @@ function M.hide()
   pendingState = nil
   if flashing then return end
   state = nil
+  hovering = false -- the pointer may still be here when the pill returns
   stop_anim()
   if canvas then canvas:hide() end
 end
@@ -140,6 +194,7 @@ end
 -- `flashing` is still true at the moment they fire (they clear it first).
 local function force_hide()
   state = nil
+  hovering = false
   stop_anim()
   if canvas then canvas:hide() end
 end

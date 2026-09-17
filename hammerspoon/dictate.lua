@@ -913,6 +913,10 @@ cancel = function(reason)
   finish()               -- sets phase idle, which clears the watchdog and Esc
 end
 
+-- Clicking the pill cancels. Registered rather than reached for, so the overlay
+-- stays a view that reports a click without knowing what a dictation is.
+overlay.on_cancel(function() cancel("pill") end)
+
 -- Created disabled: set_phase enables it only while a dictation is running, so
 -- Escape keeps its normal meaning in every app the rest of the time.
 cancel_hotkey = hs.hotkey.new({}, "escape", function() cancel("escape") end)
